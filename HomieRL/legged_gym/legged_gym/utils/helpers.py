@@ -133,6 +133,16 @@ def update_cfg_from_args(env_cfg, cfg_train, args):
             env_cfg.env.num_envs = args.num_envs
         if args.seed is not None:
             env_cfg.seed = args.seed
+        if getattr(args, "viser", False):
+            env_cfg.viser.enabled = True
+        if getattr(args, "viser_port", None) is not None:
+            env_cfg.viser.port = args.viser_port
+        if getattr(args, "viser_env_idx", None) is not None:
+            env_cfg.viser.env_idx = args.viser_env_idx
+        if getattr(args, "viser_update_interval", None) is not None:
+            env_cfg.viser.update_interval = args.viser_update_interval
+        if getattr(args, "viser_no_meshes", False):
+            env_cfg.viser.show_meshes = False
     if cfg_train is not None:
         if args.seed is not None:
             cfg_train.seed = args.seed
@@ -167,6 +177,11 @@ def get_args():
         {"name": "--num_envs", "type": int, "help": "Number of environments to create. Overrides config file if provided."},
         {"name": "--seed", "type": int, "help": "Random seed. Overrides config file if provided."},
         {"name": "--max_iterations", "type": int, "help": "Maximum number of training iterations. Overrides config file if provided."},
+        {"name": "--viser", "action": "store_true", "default": False, "help": "Enable viser robot-state visualization."},
+        {"name": "--viser_port", "type": int, "default": None, "help": "Port for the viser server."},
+        {"name": "--viser_env_idx", "type": int, "default": None, "help": "Initial environment index to visualize in viser."},
+        {"name": "--viser_update_interval", "type": int, "default": None, "help": "Number of env steps between viser updates."},
+        {"name": "--viser_no_meshes", "action": "store_true", "default": False, "help": "Render the viser robot without visual meshes."},
     ]
     # parse arguments
     args = gymutil.parse_arguments(

@@ -222,6 +222,13 @@ class LeggedRobotCfg(BaseConfig):
         pos = [10, 0, 6]  # [m]
         lookat = [11., 5, 3.]  # [m]
 
+    class viser:
+        enabled = False
+        port = 8080
+        env_idx = 0
+        update_interval = 1
+        show_meshes = True
+
     class sim:
         dt =  1/200
         substeps = 1

@@ -46,6 +46,7 @@ from legged_gym import LEGGED_GYM_ROOT_DIR
 from legged_gym.envs.base.base_task import BaseTask
 from legged_gym.utils.math import quat_apply_yaw, wrap_to_pi, torch_rand_sqrt_float
 from legged_gym.utils.helpers import class_to_dict
+from legged_gym.utils.viser_visualizer import RobotStateViser, ViserRuntimeConfig
 from .legged_robot_config import LeggedRobotCfg
 import threading
 import time
@@ -91,6 +92,7 @@ class LeggedRobot(BaseTask):
         self.height_samples = None
         self.debug_viz = False
         self.init_done = False
+        self.viser_visualizer = None
         self._parse_cfg(self.cfg)
         super().__init__(self.cfg, sim_params, physics_engine, sim_device, headless)
         self.num_one_step_obs = self.cfg.env.num_one_step_observations
@@ -105,6 +107,7 @@ class LeggedRobot(BaseTask):
             self.set_camera(self.cfg.viewer.pos, self.cfg.viewer.lookat)
         self._init_buffers()
         self._prepare_reward_function()
+        self._setup_viser_visualizer()
         self.init_done = True
 
     def step(self, actions):
@@ -197,6 +200,7 @@ class LeggedRobot(BaseTask):
         # compute observations, rewards, resets, ...
         self.check_termination()
         self.compute_reward()
+        self._update_viser_visualizer()
         env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
         termination_privileged_obs = self.compute_termination_observations(env_ids)
         self.reset_idx(env_ids)
@@ -288,6 +292,8 @@ class LeggedRobot(BaseTask):
             self.extras["time_outs"] = self.time_out_buf
 
         self.episode_length_buf[env_ids] = 0
+        if hasattr(self, "_viser_episode_start_steps"):
+            self._viser_episode_start_steps[env_ids] = self.common_step_counter
     
     def compute_reward(self):
         """ Compute rewards
@@ -664,6 +670,55 @@ class LeggedRobot(BaseTask):
         noise_vec[(10 + 2 * self.num_actions):(10 + 2 * self.num_actions + self.num_lower_dof)] = 0. # previous actions
         return noise_vec
 
+    def _setup_viser_visualizer(self):
+        viser_cfg = getattr(self.cfg, "viser", None)
+        if viser_cfg is None or not getattr(viser_cfg, "enabled", False):
+            return
+
+        if int(os.environ.get("RANK", "0")) != 0:
+            print("[viser] Skipping startup on non-main distributed rank.")
+            return
+
+        try:
+            asset_path = self.cfg.asset.file.format(LEGGED_GYM_ROOT_DIR=LEGGED_GYM_ROOT_DIR)
+            config = ViserRuntimeConfig(
+                enabled=True,
+                port=int(viser_cfg.port),
+                env_idx=int(viser_cfg.env_idx),
+                update_interval=max(1, int(viser_cfg.update_interval)),
+                show_meshes=bool(viser_cfg.show_meshes),
+            )
+            self.viser_visualizer = RobotStateViser(
+                urdf_path=asset_path,
+                num_envs=self.num_envs,
+                dt=self.dt,
+                config=config,
+            )
+        except Exception as exc:
+            print(f"[viser] Failed to start robot viewer: {exc}")
+            self.viser_visualizer = None
+
+    def _update_viser_visualizer(self):
+        if self.viser_visualizer is None:
+            return
+        if self.common_step_counter % max(1, int(self.cfg.viser.update_interval)) != 0:
+            return
+
+        try:
+            self.viser_visualizer.update(
+                root_states=self._tensor_to_numpy(self.root_states[:]),
+                dof_pos=self._tensor_to_numpy(self.dof_pos),
+                dones=self._tensor_to_numpy(self.reset_buf),
+                env_origins=self._tensor_to_numpy(self.env_origins),
+            )
+        except Exception as exc:
+            print(f"[viser] Disabling robot viewer after update failure: {exc}")
+            self.viser_visualizer = None
+
+    def _tensor_to_numpy(self, value):
+        tensor = value if isinstance(value, torch.Tensor) else torch.as_tensor(value)
+        return tensor.detach().cpu().numpy()
+
     #----------------------------------------
     def _init_buffers(self):
         """ Initialize torch tensors which will contain simulation states and processed quantities
@@ -695,6 +750,7 @@ class LeggedRobot(BaseTask):
         # initialize some data used later on
         self.common_step_counter = 0
         self.extras = {}
+        self._viser_episode_start_steps = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
         self.gravity_vec = to_torch(get_axis_params(-1., self.up_axis_idx), device=self.device).repeat((self.num_envs, 1))
         self.forward_vec = to_torch([1., 0., 0.], device=self.device).repeat((self.num_envs, 1))
         self.torques = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
