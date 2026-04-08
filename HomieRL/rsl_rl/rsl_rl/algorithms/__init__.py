@@ -29,3 +29,4 @@
 # Copyright (c) 2021 ETH Zurich, Nikita Rudin
 
 from .him_ppo import HIMPPO
+from .him_ppo_43dof import HIMPPO43dof, HIMPPO43dofNoHandObs

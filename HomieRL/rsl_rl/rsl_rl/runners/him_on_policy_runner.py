@@ -38,7 +38,7 @@ from torch.utils.tensorboard import SummaryWriter as TensorboardSummaryWriter
 import torch
 
 import rsl_rl
-from rsl_rl.algorithms import HIMPPO
+from rsl_rl.algorithms import HIMPPO, HIMPPO43dof, HIMPPO43dofNoHandObs
 from rsl_rl.modules import HIMActorCritic
 from rsl_rl.env import VecEnv
 from rsl_rl.utils import store_code_state
@@ -77,6 +77,10 @@ class HIMOnPolicyRunner:
                                                         self.env.critic_history_length,
                                                         self.env.num_lower_dof,
                                                         **self.policy_cfg).to(self.device)
+        if hasattr(self.env.cfg, "terrain"):
+            measured_points_x = getattr(self.env.cfg.terrain, "measured_points_x", [])
+            measured_points_y = getattr(self.env.cfg.terrain, "measured_points_y", [])
+            actor_critic.height_scan_shape = (len(measured_points_x), len(measured_points_y))
         alg_class = eval(self.cfg["algorithm_class_name"]) # HIMPPO
         self.alg: HIMPPO = alg_class(actor_critic, device=self.device, **self.alg_cfg)
         self.num_steps_per_env = self.cfg["num_steps_per_env"]

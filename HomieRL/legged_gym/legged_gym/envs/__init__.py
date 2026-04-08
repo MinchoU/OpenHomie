@@ -31,9 +31,24 @@
 from legged_gym import LEGGED_GYM_ROOT_DIR, LEGGED_GYM_ENVS_DIR
 from .base.legged_robot import LeggedRobot
 
-from legged_gym.envs.g1.g1_29dof_config import G1RoughCfg, G1RoughCfgPPO
+from legged_gym.envs.g1.g1_29dof_config import G1RoughCfg, G1RoughCfgPPO, G1RoughTerrainCfg, G1RoughTerrainCfgPPO
+from legged_gym.envs.g1.g1_43dof_config import (
+    G143dofNoHandObsRoughCfg,
+    G143dofNoHandObsRoughCfgPPO,
+    G143dofNoHandObsRoughTerrainCfg,
+    G143dofNoHandObsRoughTerrainCfgPPO,
+    G143dofRoughCfg,
+    G143dofRoughCfgPPO,
+    G143dofRoughTerrainCfg,
+    G143dofRoughTerrainCfgPPO,
+)
 import os
 
 from legged_gym.utils.task_registry import task_registry
 
 task_registry.register( "g1", LeggedRobot, G1RoughCfg(), G1RoughCfgPPO() )
+task_registry.register( "g1_rough", LeggedRobot, G1RoughTerrainCfg(), G1RoughTerrainCfgPPO() )
+task_registry.register( "g1_43dof", LeggedRobot, G143dofRoughCfg(), G143dofRoughCfgPPO() )
+task_registry.register( "g1_43dof_rough", LeggedRobot, G143dofRoughTerrainCfg(), G143dofRoughTerrainCfgPPO() )
+task_registry.register( "g1_43dof_nohandobs", LeggedRobot, G143dofNoHandObsRoughCfg(), G143dofNoHandObsRoughCfgPPO() )
+task_registry.register( "g1_43dof_nohandobs_rough", LeggedRobot, G143dofNoHandObsRoughTerrainCfg(), G143dofNoHandObsRoughTerrainCfgPPO() )

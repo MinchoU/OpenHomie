@@ -145,11 +145,9 @@ class TaskRegistry():
         
         train_cfg_dict = class_to_dict(train_cfg)
         runner = HIMOnPolicyRunner(env, train_cfg_dict, log_dir, device=args.rl_device)
-        #save resume path before creating a new log_dir
-        resume = args.resume
-        if resume:
+        if train_cfg.runner.resume:
             # load previously trained model
-            resume_path = "./example_model.pt"
+            resume_path = get_load_path(log_root, train_cfg.runner.load_run, train_cfg.runner.checkpoint)
             print(f"Loading model from: {resume_path}")
             runner.load(resume_path)
         return runner, train_cfg

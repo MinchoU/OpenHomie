@@ -7,7 +7,7 @@ from functools import partial
 from pathlib import Path
 import threading
 import time
-from typing import ClassVar, Dict, List, Optional
+from typing import ClassVar, Dict, List, Optional, Sequence
 
 import numpy as np
 
@@ -35,6 +35,8 @@ class EpisodeFrame:
     root_state: np.ndarray
     dof_state: np.ndarray
     env_origin: np.ndarray
+    height_scan_points: Optional[np.ndarray] = None
+    foot_ref_scandot_values: Optional[np.ndarray] = None
 
 
 def _ensure_path_is_relative_to() -> None:
@@ -63,6 +65,9 @@ class RobotStateViser:
         num_envs: int,
         dt: float,
         config: ViserRuntimeConfig,
+        sim_joint_names: Optional[Sequence[str]] = None,
+        terrain_mesh: object = None,
+        terrain_extent: Optional[tuple] = None,
     ) -> None:
         if viser is None or yourdfpy is None or ViserUrdf is None:
             raise ImportError("viser visualization requested, but `viser` or `yourdfpy` is not installed.")
@@ -80,7 +85,16 @@ class RobotStateViser:
         self._global_servers[config.port] = self.server
         self.robot_root = self.server.scene.add_frame("/robot", show_axes=True)
         self.terrain_root = self.server.scene.add_frame("/terrain", show_axes=False)
-        self.server.scene.add_grid("/terrain/grid", width=20.0, height=20.0, position=(0.0, 0.0, 0.0))
+        self._terrain_handle = None
+        self._height_scan_handle = None
+        self._foot_ref_scandot_min_text = None
+        self._foot_ref_scandot_max_text = None
+        self._foot_ref_scandot_mean_text = None
+        self._terrain_vertices, self._terrain_faces = self._get_terrain_arrays(terrain_mesh)
+        if self._terrain_vertices is None:
+            self.server.scene.add_grid("/terrain/grid", width=20.0, height=20.0, position=(0.0, 0.0, 0.0))
+        self._terrain_extent = terrain_extent
+        self._terrain_origin_key = None
 
         filename_handler = partial(yourdfpy.filename_handler_relative_to_urdf_file, urdf_fname=urdf_path)
         urdf = yourdfpy.URDF.load(
@@ -91,7 +105,13 @@ class RobotStateViser:
         )
         self.robot = ViserUrdf(self.server, urdf_or_path=urdf, root_node_name="/robot")
         self.robot.show_visual = bool(config.show_meshes)
-        self._expected_dof = len(self.robot.get_actuated_joint_limits())
+        actuated_joint_limits = self.robot.get_actuated_joint_limits()
+        if hasattr(self.robot, "get_actuated_joint_names"):
+            self._joint_names = list(self.robot.get_actuated_joint_names())
+        else:
+            self._joint_names = list(actuated_joint_limits.keys())
+        self._expected_dof = len(actuated_joint_limits)
+        self._sim_to_viser_indices = self._build_sim_to_viser_indices(sim_joint_names)
         self.robot.update_cfg(np.zeros(self._expected_dof, dtype=np.float64))
 
         self._selected_env_idx = int(np.clip(config.env_idx, 0, self.num_envs - 1))
@@ -99,6 +119,7 @@ class RobotStateViser:
         self._warned_dof_mismatch = False
         self._logged_first_pose = False
         self._latest_root_position = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+        self._prev_root_position = self._latest_root_position.copy()
         self._render_mode = "live"
 
         self._recording_episode: List[EpisodeFrame] = []
@@ -118,6 +139,91 @@ class RobotStateViser:
         print(f"[viser] Started robot viewer at http://localhost:{config.port} (env_idx={self._selected_env_idx})")
         print(f"[viser] Loaded URDF: {urdf_path} (actuated_dof={self._expected_dof})")
 
+    def _build_sim_to_viser_indices(self, sim_joint_names: Optional[Sequence[str]]) -> Optional[np.ndarray]:
+        if sim_joint_names is None:
+            return None
+
+        sim_joint_to_idx = {name: idx for idx, name in enumerate(sim_joint_names)}
+        missing = [name for name in self._joint_names if name not in sim_joint_to_idx]
+        if missing:
+            print(f"[viser] Joint name mismatch. Missing simulator joints for viser: {missing}")
+            return None
+
+        indices = np.array([sim_joint_to_idx[name] for name in self._joint_names], dtype=np.int64)
+        if not np.array_equal(indices, np.arange(len(indices))):
+            print("[viser] Reordering simulator DOF positions into URDF/viser joint order.")
+        return indices
+
+    def _get_terrain_arrays(self, terrain_mesh: object) -> tuple:
+        if terrain_mesh is None:
+            return None, None
+
+        vertices = getattr(terrain_mesh, "vertices", None)
+        faces = getattr(terrain_mesh, "faces", None)
+        if faces is None:
+            faces = getattr(terrain_mesh, "triangles", None)
+        if vertices is None or faces is None:
+            print("[viser] Skipping terrain mesh because it does not expose vertices/faces.")
+            return None, None
+
+        vertices_np = np.asarray(vertices, dtype=np.float32)
+        faces_np = np.asarray(faces, dtype=np.uint32)
+        if vertices_np.size == 0 or faces_np.size == 0:
+            print("[viser] Skipping empty terrain mesh.")
+            return None, None
+        cfg = getattr(terrain_mesh, "cfg", None)
+        border_size = float(getattr(cfg, "border_size", 0.0)) if cfg is not None else 0.0
+        vertices_np = vertices_np.copy()
+        vertices_np[:, 0] -= border_size
+        vertices_np[:, 1] -= border_size
+        return vertices_np, faces_np
+
+    def _update_terrain_mesh(self, env_origin: np.ndarray) -> None:
+        if self._terrain_vertices is None or self._terrain_faces is None or self._terrain_extent is None:
+            return
+
+        origin = np.asarray(env_origin, dtype=np.float32)
+        origin_key = tuple(np.round(origin, decimals=4).tolist())
+        if origin_key == self._terrain_origin_key:
+            return
+        self._terrain_origin_key = origin_key
+
+        terrain_length, terrain_width = self._terrain_extent
+        padding = 0.5
+        vertices = self._terrain_vertices
+        local_xy = vertices[:, :2] - origin[:2]
+        vertex_mask = (
+            (np.abs(local_xy[:, 0]) <= terrain_length / 2.0 + padding)
+            & (np.abs(local_xy[:, 1]) <= terrain_width / 2.0 + padding)
+        )
+        face_mask = vertex_mask[self._terrain_faces].all(axis=1)
+        cropped_faces = self._terrain_faces[face_mask]
+        if cropped_faces.size == 0:
+            print(f"[viser] No terrain mesh faces found near env origin {np.round(origin, 4).tolist()}.")
+            return
+
+        used_vertices = np.unique(cropped_faces.reshape(-1))
+        remap = np.full(len(vertices), -1, dtype=np.int64)
+        remap[used_vertices] = np.arange(len(used_vertices), dtype=np.int64)
+        cropped_vertices = vertices[used_vertices].copy()
+        cropped_vertices -= origin
+        cropped_faces = remap[cropped_faces].astype(np.uint32, copy=False)
+
+        if self._terrain_handle is not None:
+            self._terrain_handle.remove()
+        self._terrain_handle = self.server.scene.add_mesh_simple(
+            "/terrain/mesh",
+            vertices=cropped_vertices,
+            faces=cropped_faces,
+            color=(120, 120, 120),
+            opacity=0.75,
+            side="double",
+        )
+        print(
+            "[viser] Loaded cropped terrain mesh: "
+            f"origin={np.round(origin, 4).tolist()}, vertices={len(cropped_vertices)}, faces={len(cropped_faces)}"
+        )
+
     def _build_gui(self) -> None:
         with self.server.gui.add_folder("Robot Viewer"):
             self.env_idx_slider = self.server.gui.add_slider(
@@ -129,6 +235,7 @@ class RobotStateViser:
             )
             self.recenter_cb = self.server.gui.add_checkbox("Recenter env", initial_value=True)
             self.show_meshes_cb = self.server.gui.add_checkbox("Show meshes", initial_value=self.config.show_meshes)
+            self.follow_robot_cb = self.server.gui.add_checkbox("Follow robot", initial_value=False)
             self.mode_text = self.server.gui.add_text("Mode", initial_value="live")
 
         @self.env_idx_slider.on_update
@@ -167,6 +274,8 @@ class RobotStateViser:
         dof_pos: np.ndarray,
         dones: np.ndarray,
         env_origins: Optional[np.ndarray] = None,
+        height_scan_points: Optional[np.ndarray] = None,
+        foot_ref_scandot_values: Optional[np.ndarray] = None,
     ) -> None:
         env_idx = int(np.clip(self._selected_env_idx, 0, min(len(root_states), len(dof_pos)) - 1))
         origin = (
@@ -174,10 +283,28 @@ class RobotStateViser:
             if env_origins is not None
             else np.zeros(3, dtype=np.float64)
         )
+        scan_points = (
+            np.asarray(
+                height_scan_points[env_idx if len(height_scan_points) == len(root_states) else 0],
+                dtype=np.float32,
+            ).copy()
+            if height_scan_points is not None
+            else None
+        )
+        foot_ref_values = (
+            np.asarray(
+                foot_ref_scandot_values[env_idx if len(foot_ref_scandot_values) == len(root_states) else 0],
+                dtype=np.float32,
+            ).reshape(-1).copy()
+            if foot_ref_scandot_values is not None
+            else None
+        )
         frame = EpisodeFrame(
             root_state=np.asarray(root_states[env_idx], dtype=np.float64).copy(),
             dof_state=np.asarray(dof_pos[env_idx], dtype=np.float64).reshape(-1).copy(),
             env_origin=origin,
+            height_scan_points=scan_points,
+            foot_ref_scandot_values=foot_ref_values,
         )
         done = bool(np.asarray(dones[env_idx]).item())
 
@@ -246,10 +373,16 @@ class RobotStateViser:
         if bool(self.recenter_cb.value):
             display_pos -= frame.env_origin
 
+        self._prev_root_position = self._latest_root_position.copy()
         self._latest_root_position = display_pos.copy()
         self.robot_root.position = tuple(display_pos.tolist())
         self.robot_root.wxyz = tuple(quat_wxyz.tolist())
-        self.terrain_root.position = tuple(np.zeros(3, dtype=np.float64).tolist())
+        terrain_pos = np.zeros(3, dtype=np.float64) if bool(self.recenter_cb.value) else frame.env_origin
+        self.terrain_root.position = tuple(terrain_pos.tolist())
+        self._update_terrain_mesh(frame.env_origin)
+        self._follow_robot_camera()
+        self._update_height_scan(frame)
+        self._update_foot_ref_scandot_text(frame)
 
         if not self._logged_first_pose:
             print(
@@ -260,17 +393,76 @@ class RobotStateViser:
             )
             self._logged_first_pose = True
 
-        if dof_state.shape[0] != self._expected_dof and not self._warned_dof_mismatch:
+        expected_input_dof = len(self._sim_to_viser_indices) if self._sim_to_viser_indices is not None else self._expected_dof
+        if dof_state.shape[0] != expected_input_dof and not self._warned_dof_mismatch:
             print(
                 f"[viser] Robot DOF mismatch: simulator has {dof_state.shape[0]}, "
-                f"URDF expects {self._expected_dof}. Using the overlapping prefix."
+                f"viewer mapping expects {expected_input_dof}. Using the overlapping prefix."
             )
             self._warned_dof_mismatch = True
 
-        self.robot.update_cfg(dof_state[: self._expected_dof])
+        if self._sim_to_viser_indices is not None and dof_state.shape[0] >= len(self._sim_to_viser_indices):
+            cfg = dof_state[self._sim_to_viser_indices]
+        else:
+            cfg = dof_state[: self._expected_dof]
+        self.robot.update_cfg(cfg)
         if mode != self._render_mode:
             self._render_mode = mode
             self.mode_text.value = mode
+
+    def _update_height_scan(self, frame: EpisodeFrame) -> None:
+        if frame.height_scan_points is None:
+            return
+
+        points = frame.height_scan_points.astype(np.float32, copy=True)
+        points -= frame.env_origin.astype(np.float32, copy=False)
+        colors = np.zeros_like(points, dtype=np.float32)
+        colors[:] = np.array([255.0, 220.0, 0.0], dtype=np.float32)
+
+        if self._height_scan_handle is None:
+            self._height_scan_handle = self.server.scene.add_point_cloud(
+                "/terrain/height_scan",
+                points=points,
+                colors=colors,
+                point_size=0.035,
+                point_shape="circle",
+            )
+        else:
+            self._height_scan_handle.points = points
+            self._height_scan_handle.colors = colors
+
+    def _update_foot_ref_scandot_text(self, frame: EpisodeFrame) -> None:
+        if frame.foot_ref_scandot_values is None:
+            return
+
+        values = frame.foot_ref_scandot_values
+        min_text = f"{np.min(values):.3f}"
+        max_text = f"{np.max(values):.3f}"
+        mean_text = f"{np.mean(values):.3f}"
+        if self._foot_ref_scandot_min_text is None:
+            self._foot_ref_scandot_min_text = self.server.gui.add_text("Foot-ref scandot min", initial_value=min_text)
+            self._foot_ref_scandot_max_text = self.server.gui.add_text("Foot-ref scandot max", initial_value=max_text)
+            self._foot_ref_scandot_mean_text = self.server.gui.add_text("Foot-ref scandot mean", initial_value=mean_text)
+        else:
+            self._foot_ref_scandot_min_text.value = min_text
+            self._foot_ref_scandot_max_text.value = max_text
+            self._foot_ref_scandot_mean_text.value = mean_text
+
+    def _follow_robot_camera(self) -> None:
+        if not bool(self.follow_robot_cb.value):
+            return
+        delta = self._latest_root_position - self._prev_root_position
+        if np.linalg.norm(delta) < 1e-8:
+            return
+        clients = self.server.get_clients()
+        for client in clients.values():
+            try:
+                cam_pos = np.array(client.camera.position, dtype=np.float64)
+                cam_look = np.array(client.camera.look_at, dtype=np.float64)
+                client.camera.position = tuple((cam_pos + delta).tolist())
+                client.camera.look_at = tuple((cam_look + delta).tolist())
+            except Exception:
+                pass
 
     def close(self) -> None:
         self._stop_event.set()

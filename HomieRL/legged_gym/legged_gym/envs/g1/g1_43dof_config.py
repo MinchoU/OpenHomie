@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
-# 
+#
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are met:
 #
@@ -31,22 +31,22 @@
 from legged_gym.envs.base.legged_robot_config import LeggedRobotCfg, LeggedRobotCfgPPO
 import numpy as np
 
-class G1RoughCfg( LeggedRobotCfg ):
+class G143dofRoughCfg( LeggedRobotCfg ):
     class init_state( LeggedRobotCfg.init_state ):
         pos = [0.0, 0.0, 0.75] # x,y,z [m]
         default_joint_angles = { # = target angles [rad] when action = 0.0
-            'left_hip_yaw_joint' : 0. ,   
-           'left_hip_roll_joint' : 0,               
-           'left_hip_pitch_joint' : -0.1,         
-           'left_knee_joint' : 0.3,       
-           'left_ankle_pitch_joint' : -0.2,     
-           'left_ankle_roll_joint' : 0,     
-           'right_hip_yaw_joint' : 0., 
-           'right_hip_roll_joint' : 0, 
-           'right_hip_pitch_joint' : -0.1,                                       
-           'right_knee_joint' : 0.3,                                             
-           'right_ankle_pitch_joint': -0.2,                              
-           'right_ankle_roll_joint' : 0,         
+            'left_hip_yaw_joint' : 0. ,
+           'left_hip_roll_joint' : 0,
+           'left_hip_pitch_joint' : -0.1,
+           'left_knee_joint' : 0.3,
+           'left_ankle_pitch_joint' : -0.2,
+           'left_ankle_roll_joint' : 0,
+           'right_hip_yaw_joint' : 0.,
+           'right_hip_roll_joint' : 0,
+           'right_hip_pitch_joint' : -0.1,
+           'right_knee_joint' : 0.3,
+           'right_ankle_pitch_joint': -0.2,
+           'right_ankle_roll_joint' : 0,
             "waist_yaw_joint":0.,
             "waist_roll_joint": 0.,
             "waist_pitch_joint": 0.,
@@ -57,28 +57,27 @@ class G1RoughCfg( LeggedRobotCfg ):
             "left_wrist_roll_joint": 0.,
             "left_wrist_pitch_joint": 0.,
             "left_wrist_yaw_joint": 0.,
-            "left_hand_index_0_joint": 0.,
-            "left_hand_index_1_joint": 0.,
-            "left_hand_middle_0_joint": 0.,
-            "left_hand_middle_1_joint": 0.,
             "left_hand_thumb_0_joint": 0.,
             "left_hand_thumb_1_joint": 0.,
             "left_hand_thumb_2_joint": 0.,
+            "left_hand_middle_0_joint": 0.,
+            "left_hand_middle_1_joint": 0.,
+            "left_hand_index_0_joint": 0.,
+            "left_hand_index_1_joint": 0.,
             "right_shoulder_pitch_joint": 0.,
-            "right_shoulder_roll_joint": -0.,#-0.3
+            "right_shoulder_roll_joint": -0.,
             "right_shoulder_yaw_joint": 0.,
-            "right_elbow_joint": 0.,#0.8
+            "right_elbow_joint": 0.,
             "right_wrist_roll_joint": 0.,
             "right_wrist_pitch_joint": 0.,
             "right_wrist_yaw_joint": 0.,
-            "right_hand_index_0_joint": 0.,
-            "right_hand_index_1_joint": 0.,
-            "right_hand_middle_0_joint": 0.,
-            "right_hand_middle_1_joint": 0.,
             "right_hand_thumb_0_joint": 0.,
             "right_hand_thumb_1_joint": 0.,
             "right_hand_thumb_2_joint": 0.,
-           
+            "right_hand_middle_0_joint": 0.,
+            "right_hand_middle_1_joint": 0.,
+            "right_hand_index_0_joint": 0.,
+            "right_hand_index_1_joint": 0.,
         }
 
     class control( LeggedRobotCfg.control ):
@@ -90,13 +89,16 @@ class G1RoughCfg( LeggedRobotCfg ):
                      'hip_pitch': 100,
                      'knee': 150,
                      'ankle': 40,
-                     
+
                      "waist": 300,
                      "shoulder": 200,
                      "wrist": 20,
                      "elbow": 100,
-                     "hand": 10
-                    
+                     "hand_thumb_0": 2.0,
+                     "hand_thumb_1": 0.5,
+                     "hand_thumb_2": 0.5,
+                     "hand_middle": 0.5,
+                     "hand_index": 0.5,
                      }  # [N*m/rad]
         damping = {  'hip_yaw': 2,
                      'hip_roll': 2,
@@ -107,7 +109,11 @@ class G1RoughCfg( LeggedRobotCfg ):
                      "shoulder": 4,
                      "wrist": 0.5,
                      "elbow": 1,
-                     "hand": 2
+                     "hand_thumb_0": 0.1,
+                     "hand_thumb_1": 0.1,
+                     "hand_thumb_2": 0.1,
+                     "hand_middle": 0.1,
+                     "hand_index": 0.1,
                      }  # [N*m/rad]  # [N*m*s/rad]
         # action scale: target angle = actionScale * action + defaultAngle
         action_scale = 0.25
@@ -116,21 +122,21 @@ class G1RoughCfg( LeggedRobotCfg ):
         hip_reduction = 1.0
 
     class commands( LeggedRobotCfg.commands ):
-        curriculum = False # NOTE set True later
+        curriculum = False
         max_curriculum = 1.4
-        num_commands = 5 # lin_vel_x, lin_vel_y, ang_vel_yaw, heading, height, orientation
-        resampling_time = 4. # time before command are changed[s]
-        heading_command = False # if true: compute ang vel command from heading error
+        num_commands = 5 # lin_vel_x, lin_vel_y, ang_vel_yaw, heading, height
+        resampling_time = 4.
+        heading_command = False
         heading_to_ang_vel = False
         class ranges( LeggedRobotCfg.commands.ranges):
-            lin_vel_x = [-0.8, 1.2] # min max [m/s]
-            lin_vel_y = [-0.5, 0.5]   # min max [m/s]
-            ang_vel_yaw = [-0.8, 0.8]    # min max [rad/s]
+            lin_vel_x = [-0.8, 1.2]
+            lin_vel_y = [-0.5, 0.5]
+            ang_vel_yaw = [-0.8, 0.8]
             heading = [-3.14, 3.14]
             height = [-0.5, 0.0]
 
     class asset( LeggedRobotCfg.asset ):
-        file = '{LEGGED_GYM_ROOT_DIR}/resources/robots/g1_description/g1.urdf'
+        file = '{LEGGED_GYM_ROOT_DIR}/resources/robots/g1_description/g1_43dof.urdf'
         name = "g1"
         foot_name = "ankle_roll"
         left_foot_name = "left_foot"
@@ -152,52 +158,52 @@ class G1RoughCfg( LeggedRobotCfg ):
         flip_visual_attachments = False
         ankle_sole_distance = 0.02
 
-        
+
     class domain_rand(LeggedRobotCfg.domain_rand):
-        
+
         use_random = True
-        
+
         randomize_joint_injection = use_random
         joint_injection_range = [-0.05, 0.05]
-        
+
         randomize_actuation_offset = use_random
         actuation_offset_range = [-0.05, 0.05]
 
         randomize_payload_mass = use_random
         payload_mass_range = [-5, 10]
-        
+
         hand_payload_mass_range = [-0.1, 0.3]
 
         randomize_com_displacement = False
         com_displacement_range = [-0.1, 0.1]
-        
+
         randomize_body_displacement = use_random
         body_displacement_range = [-0.1, 0.1]
 
         randomize_link_mass = use_random
         link_mass_range = [0.8, 1.2]
-        
+
         randomize_friction = use_random
         friction_range = [0.1, 3.0]
-        
+
         randomize_restitution = use_random
         restitution_range = [0.0, 1.0]
-        
+
         randomize_kp = use_random
         kp_range = [0.9, 1.1]
-        
+
         randomize_kd = use_random
         kd_range = [0.9, 1.1]
-        
+
         randomize_initial_joint_pos = use_random
         initial_joint_pos_scale = [0.8, 1.2]
         initial_joint_pos_offset = [-0.1, 0.1]
-        
+
         push_robots = use_random
         push_interval_s = 4
         upper_interval_s = 1
         max_push_vel_xy = 0.5
-        
+
         init_upper_ratio = 0.
         delay = use_random
 
@@ -235,7 +241,7 @@ class G1RoughCfg( LeggedRobotCfg ):
             feet_contact_forces = -0.00025
             contact_momentum = 2.5e-4
             action_vanish = -1.0
-            stand_still = -0.15    
+            stand_still = -0.15
         only_positive_rewards = False
         tracking_sigma = 0.25
         soft_dof_pos_limit = 0.975
@@ -249,22 +255,22 @@ class G1RoughCfg( LeggedRobotCfg ):
         most_knee_distance_lateral = 0.35
         least_knee_distance_lateral = 0.2
         clearance_height_target = 0.14
-        
+
     class env( LeggedRobotCfg.rewards ):
         num_envs = 4096
         num_actions = 12
-        num_dofs = 27
-        num_one_step_observations = 2 * num_dofs + 10 + num_actions # 54 + 10 + 12 = 22 + 54 = 76
+        num_dofs = 43
+        num_one_step_observations = 2 * num_dofs + 10 + num_actions # 86 + 10 + 12 = 108
         num_one_step_privileged_obs = num_one_step_observations + 3
         num_actor_history = 6
         num_critic_history = 1
         num_observations = num_actor_history * num_one_step_observations
         num_privileged_obs = num_critic_history * num_one_step_privileged_obs
         action_curriculum = True
-        env_spacing = 3.  # not used with heightfields/trimeshes 
-        send_timeouts = True # send time out information to the algorithm
+        env_spacing = 3.
+        send_timeouts = True
         episode_length_s = 20
-        
+
     class terrain(LeggedRobotCfg.terrain):
         mesh_type = 'plane'
 
@@ -279,33 +285,32 @@ class G1RoughCfg( LeggedRobotCfg ):
             gravity = 0.05
             height_measurement = 0.1
 
-class G1RoughCfgPPO( LeggedRobotCfgPPO ):
+class G143dofRoughCfgPPO( LeggedRobotCfgPPO ):
     class algorithm( LeggedRobotCfgPPO.algorithm ):
         use_flip = True
         entropy_coef = 0.01
         symmetry_scale = 1.0
     class runner( LeggedRobotCfgPPO.runner ):
         policy_class_name = 'HIMActorCritic'
-        algorithm_class_name = 'HIMPPO'
+        algorithm_class_name = 'HIMPPO43dof'
         save_interval = 200
         num_steps_per_env = 50
         max_iterations = 100000
         run_name = ''
         experiment_name = ''
         wandb_project = ""
-        logger = "wandb"        
-        # logger = "tensorboard"        
-        wandb_user = "" # enter your own wandb user name here
+        logger = "wandb"
+        wandb_user = ""
 
-class G1RoughTerrainCfg( G1RoughCfg ):
-    class env( G1RoughCfg.env ):
-        num_height_points = len(G1RoughCfg.terrain.measured_points_x) * len(G1RoughCfg.terrain.measured_points_y)
-        num_one_step_observations = G1RoughCfg.env.num_one_step_observations
-        num_one_step_privileged_obs = G1RoughCfg.env.num_one_step_privileged_obs
-        num_observations = G1RoughCfg.env.num_actor_history * num_one_step_observations + num_height_points
-        num_privileged_obs = G1RoughCfg.env.num_critic_history * num_one_step_privileged_obs + num_height_points
+class G143dofRoughTerrainCfg( G143dofRoughCfg ):
+    class env( G143dofRoughCfg.env ):
+        num_height_points = len(G143dofRoughCfg.terrain.measured_points_x) * len(G143dofRoughCfg.terrain.measured_points_y)
+        num_one_step_observations = G143dofRoughCfg.env.num_one_step_observations
+        num_one_step_privileged_obs = G143dofRoughCfg.env.num_one_step_privileged_obs
+        num_observations = G143dofRoughCfg.env.num_actor_history * num_one_step_observations + num_height_points
+        num_privileged_obs = G143dofRoughCfg.env.num_critic_history * num_one_step_privileged_obs + num_height_points
 
-    class terrain( G1RoughCfg.terrain ):
+    class terrain( G143dofRoughCfg.terrain ):
         mesh_type = 'trimesh'
         curriculum = True
         max_init_terrain_level = 5
@@ -313,6 +318,43 @@ class G1RoughTerrainCfg( G1RoughCfg ):
         num_cols = 20
         terrain_proportions = [0.1, 0.2, 0.3, 0.3, 0.1]
 
-class G1RoughTerrainCfgPPO( G1RoughCfgPPO ):
-    class runner( G1RoughCfgPPO.runner ):
-        experiment_name = 'g1_rough'
+class G143dofRoughTerrainCfgPPO( G143dofRoughCfgPPO ):
+    class runner( G143dofRoughCfgPPO.runner ):
+        experiment_name = 'g1_43dof_rough'
+
+
+class G143dofNoHandObsRoughCfg( G143dofRoughCfg ):
+    class env( G143dofRoughCfg.env ):
+        observe_hand_joints = False
+        num_observed_dofs = 29
+        num_one_step_observations = 2 * num_observed_dofs + 10 + G143dofRoughCfg.env.num_actions
+        num_one_step_privileged_obs = num_one_step_observations + 3
+        num_observations = G143dofRoughCfg.env.num_actor_history * num_one_step_observations
+        num_privileged_obs = G143dofRoughCfg.env.num_critic_history * num_one_step_privileged_obs
+
+
+class G143dofNoHandObsRoughCfgPPO( G143dofRoughCfgPPO ):
+    class runner( G143dofRoughCfgPPO.runner ):
+        algorithm_class_name = 'HIMPPO43dofNoHandObs'
+
+
+class G143dofNoHandObsRoughTerrainCfg( G143dofNoHandObsRoughCfg ):
+    class env( G143dofNoHandObsRoughCfg.env ):
+        num_height_points = len(G143dofNoHandObsRoughCfg.terrain.measured_points_x) * len(G143dofNoHandObsRoughCfg.terrain.measured_points_y)
+        num_one_step_observations = G143dofNoHandObsRoughCfg.env.num_one_step_observations
+        num_one_step_privileged_obs = G143dofNoHandObsRoughCfg.env.num_one_step_privileged_obs
+        num_observations = G143dofNoHandObsRoughCfg.env.num_actor_history * num_one_step_observations + num_height_points
+        num_privileged_obs = G143dofNoHandObsRoughCfg.env.num_critic_history * num_one_step_privileged_obs + num_height_points
+
+    class terrain( G143dofNoHandObsRoughCfg.terrain ):
+        mesh_type = 'trimesh'
+        curriculum = True
+        max_init_terrain_level = 5
+        num_rows = 10
+        num_cols = 20
+        terrain_proportions = [0.1, 0.2, 0.3, 0.3, 0.1]
+
+
+class G143dofNoHandObsRoughTerrainCfgPPO( G143dofNoHandObsRoughCfgPPO ):
+    class runner( G143dofNoHandObsRoughCfgPPO.runner ):
+        experiment_name = 'g1_43dof_nohandobs_rough'

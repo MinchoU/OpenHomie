@@ -133,6 +133,15 @@ class HIMPPO:
         self.transition.clear()
         self.transition_sym.clear()
         self.actor_critic.reset(dones)
+
+    def flip_g1_height_obs(self, height_obs):
+        if height_obs.shape[1] == 0:
+            return height_obs
+
+        num_x, num_y = getattr(self.actor_critic, "height_scan_shape", (height_obs.shape[1], 1))
+        if height_obs.shape[1] != num_x * num_y:
+            return height_obs
+        return height_obs.view(-1, num_x, num_y).flip(dims=[2]).reshape(-1, num_x * num_y)
     
     def compute_returns(self, last_critic_obs):
         last_values= self.actor_critic.evaluate(last_critic_obs).detach()
@@ -331,7 +340,12 @@ class HIMPPO:
         flipped_proprioceptive_obs[:, :, 20+54] =  proprioceptive_obs[:, :, 14+54]
         flipped_proprioceptive_obs[:, :, 21+54] = -proprioceptive_obs[:, :, 15+54]
 
-        return flipped_proprioceptive_obs.view(-1, self.actor_critic.num_one_step_obs * self.actor_critic.actor_history_length).detach()                                                                                                                                                                                                                                             
+        flipped_obs = flipped_proprioceptive_obs.view(-1, self.actor_critic.num_one_step_obs * self.actor_critic.actor_history_length)
+        height_obs = obs[:, self.actor_critic.num_one_step_obs * self.actor_critic.actor_history_length:]
+        if height_obs.shape[1] > 0:
+            height_obs = self.flip_g1_height_obs(height_obs)
+            flipped_obs = torch.cat((flipped_obs, height_obs), dim=-1)
+        return flipped_obs.detach()                                                                                                                                                                                                                                             
     
     def flip_g1_critic_obs(self, critic_obs):
         proprioceptive_obs = torch.clone(critic_obs[:, :self.actor_critic.num_one_step_critic_obs * self.actor_critic.critic_history_length])
@@ -434,7 +448,12 @@ class HIMPPO:
         flipped_proprioceptive_obs[:, :, 23+54] = -proprioceptive_obs[:, :, 23+54] # base lin vel y
         flipped_proprioceptive_obs[:, :, 24+54] =  proprioceptive_obs[:, :, 24+54] # base lin vel z
 
-        return flipped_proprioceptive_obs.view(-1, self.actor_critic.num_one_step_critic_obs * self.actor_critic.critic_history_length).detach()
+        flipped_obs = flipped_proprioceptive_obs.view(-1, self.actor_critic.num_one_step_critic_obs * self.actor_critic.critic_history_length)
+        height_obs = critic_obs[:, self.actor_critic.num_one_step_critic_obs * self.actor_critic.critic_history_length:]
+        if height_obs.shape[1] > 0:
+            height_obs = self.flip_g1_height_obs(height_obs)
+            flipped_obs = torch.cat((flipped_obs, height_obs), dim=-1)
+        return flipped_obs.detach()
     
     def flip_g1_actions(self, actions):
         flipped_actions = torch.zeros_like(actions)
