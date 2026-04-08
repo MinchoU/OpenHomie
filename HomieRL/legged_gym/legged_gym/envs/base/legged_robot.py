@@ -824,12 +824,25 @@ class LeggedRobot(BaseTask):
                 selected_env_ids = torch.tensor([selected_env_idx], device=self.device, dtype=torch.long)
                 height_scan_points = self._tensor_to_numpy(self._get_height_scan_points(selected_env_ids))
                 foot_reference_height = torch.mean(self.feet_pos[selected_env_ids, :, 2], dim=1, keepdim=True)
-                foot_ref_scandot_values = self._tensor_to_numpy(self.measured_heights[selected_env_ids] - foot_reference_height)
+                foot_ref_scandot_values = self._tensor_to_numpy(
+                    self.measured_heights[selected_env_ids] - foot_reference_height
+                )
+            base_heights = (
+                torch.max(
+                    self.root_states[:, 2] - self.feet_pos[:, 0, 2],
+                    self.root_states[:, 2] - self.feet_pos[:, 1, 2],
+                )
+                + float(getattr(self.cfg.asset, "ankle_sole_distance", 0.0))
+            )
+            head_positions = self.rigid_body_states[:, self._viser_head_index, 0:3]
             self.viser_visualizer.update(
                 root_states=self._tensor_to_numpy(self.root_states[:]),
                 dof_pos=self._tensor_to_numpy(self.dof_pos),
                 dones=self._tensor_to_numpy(self.reset_buf),
                 env_origins=self._tensor_to_numpy(self.env_origins),
+                commands=self._tensor_to_numpy(self.commands),
+                head_positions=self._tensor_to_numpy(head_positions),
+                base_heights=self._tensor_to_numpy(base_heights),
                 height_scan_points=height_scan_points,
                 foot_ref_scandot_values=foot_ref_scandot_values,
             )
@@ -1226,6 +1239,12 @@ class LeggedRobot(BaseTask):
             
         self.upper_body_index = self.gym.find_actor_rigid_body_handle(self.envs[0], self.actor_handles[0], self.cfg.asset.upper_body_link)
         self.imu_index = self.gym.find_actor_rigid_body_handle(self.envs[0], self.actor_handles[0], self.cfg.asset.imu_link)
+        head_link_name = "head_link"
+        self._viser_head_index = (
+            self.gym.find_actor_rigid_body_handle(self.envs[0], self.actor_handles[0], head_link_name)
+            if head_link_name in self.body_names
+            else self.upper_body_index
+        )
 
     def _get_env_origins(self):
         if self.cfg.terrain.mesh_type in ["heightfield", "trimesh"]:
