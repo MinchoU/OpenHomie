@@ -125,6 +125,38 @@ def get_load_path(root, load_run=-1, checkpoint=-1):
     load_path = os.path.join(load_run, model)
     return load_path
 
+def apply_reward_scale_overrides(env_cfg, reward_scale_overrides):
+    if not reward_scale_overrides:
+        return
+    if isinstance(reward_scale_overrides, str):
+        reward_scale_overrides = [reward_scale_overrides]
+
+    for override in reward_scale_overrides:
+        for override in override.split(","):
+            override = override.strip()
+            if not override:
+                continue
+            _apply_reward_scale_override(env_cfg, override)
+
+def _apply_reward_scale_override(env_cfg, override):
+    if "=" not in override:
+        raise ValueError(f"Invalid --reward_scale override '{override}'. Expected key=value.")
+    key, value = override.split("=", 1)
+    key = key.strip()
+    value = value.strip()
+    if not key or not value:
+        raise ValueError(f"Invalid --reward_scale override '{override}'. Expected key=value.")
+    if not hasattr(env_cfg.rewards.scales, key):
+        raise ValueError(f"Unknown reward scale '{key}' in --reward_scale {override}.")
+    try:
+        value = float(value)
+    except ValueError as exc:
+        raise ValueError(f"Invalid value for --reward_scale {override}. Expected a float.") from exc
+
+    old_value = getattr(env_cfg.rewards.scales, key)
+    setattr(env_cfg.rewards.scales, key, value)
+    print(f"Overriding reward scale: {key} {old_value} -> {value}")
+
 def update_cfg_from_args(env_cfg, cfg_train, args):
     # seed
     if env_cfg is not None:
@@ -143,6 +175,7 @@ def update_cfg_from_args(env_cfg, cfg_train, args):
             env_cfg.viser.update_interval = args.viser_update_interval
         if getattr(args, "viser_no_meshes", False):
             env_cfg.viser.show_meshes = False
+        apply_reward_scale_overrides(env_cfg, getattr(args, "reward_scale", None))
     if cfg_train is not None:
         if args.seed is not None:
             cfg_train.seed = args.seed
@@ -177,11 +210,13 @@ def get_args():
         {"name": "--num_envs", "type": int, "help": "Number of environments to create. Overrides config file if provided."},
         {"name": "--seed", "type": int, "help": "Random seed. Overrides config file if provided."},
         {"name": "--max_iterations", "type": int, "help": "Maximum number of training iterations. Overrides config file if provided."},
+        {"name": "--export_policy", "action": "store_true", "default": False, "help": "Export the loaded policy as JIT and ONNX during play."},
         {"name": "--viser", "action": "store_true", "default": False, "help": "Enable viser robot-state visualization."},
         {"name": "--viser_port", "type": int, "default": None, "help": "Port for the viser server."},
         {"name": "--viser_env_idx", "type": int, "default": None, "help": "Initial environment index to visualize in viser."},
         {"name": "--viser_update_interval", "type": int, "default": None, "help": "Number of env steps between viser updates."},
         {"name": "--viser_no_meshes", "action": "store_true", "default": False, "help": "Render the viser robot without visual meshes."},
+        {"name": "--reward_scale", "action": "append", "default": None, "help": "Override a reward scale as key=value. Can be passed multiple times."},
     ]
     # parse arguments
     args = gymutil.parse_arguments(
@@ -195,34 +230,81 @@ def get_args():
     #     args.sim_device += f":{args.sim_device_id}"
     return args
 
-def export_policy_as_jit(actor_critic, path):
+def export_policy_as_jit(actor_critic, path, filename=None):
+    if filename is None:
+        filename = 'policy.pt' if hasattr(actor_critic, 'estimator') else 'policy_1.pt'
     if hasattr(actor_critic, 'estimator'):
         # assumes LSTM: TODO add GRU
-        exporter = PolicyExporterHIM(actor_critic)
-        exporter.export(path)
+        if getattr(actor_critic, "actor_use_height", False):
+            exporter = PolicyExporterHIMWithTerrain(actor_critic)
+        else:
+            exporter = PolicyExporterHIM(actor_critic)
+        exporter.export(path, filename)
     else: 
         os.makedirs(path, exist_ok=True)
-        path = os.path.join(path, 'policy_1.pt')
+        path = os.path.join(path, filename)
         model = copy.deepcopy(actor_critic.actor).to('cpu')
         traced_script_module = torch.jit.script(model)
         traced_script_module.save(path)
 
 class PolicyExporterHIM(torch.nn.Module):
+    __constants__ = [
+        "num_one_step_obs",
+        "actor_proprioceptive_obs_length",
+    ]
+
     def __init__(self, actor_critic):
         super().__init__()
         self.actor = copy.deepcopy(actor_critic.actor)
         self.estimator = copy.deepcopy(actor_critic.estimator.encoder)
+        self.num_one_step_obs = actor_critic.num_one_step_obs
+        self.actor_proprioceptive_obs_length = actor_critic.actor_proprioceptive_obs_length
 
     def forward(self, obs_history):
-        parts = self.estimator(obs_history)
+        parts = self.estimator(obs_history[:, 0:self.actor_proprioceptive_obs_length])
         vel, z = parts[..., :3], parts[..., 3:]
         z = F.normalize(z, dim=-1, p=2.0)
-        
-        return self.actor(torch.cat((obs_history[:, -76:], vel, z), dim=1))
+        latest_obs = obs_history[:, -self.num_one_step_obs:]
+        actor_input = torch.cat((latest_obs, vel, z), dim=1)
+        return self.actor(actor_input)
 
-    def export(self, path):
+    def export(self, path, filename='policy.pt'):
         os.makedirs(path, exist_ok=True)
-        path = os.path.join(path, 'policy.pt')
+        path = os.path.join(path, filename)
+        self.to('cpu')
+        traced_script_module = torch.jit.script(self)
+        traced_script_module.save(path)
+
+
+class PolicyExporterHIMWithTerrain(torch.nn.Module):
+    __constants__ = [
+        "num_one_step_obs",
+        "actor_proprioceptive_obs_length",
+        "num_height_points",
+    ]
+
+    def __init__(self, actor_critic):
+        super().__init__()
+        self.actor = copy.deepcopy(actor_critic.actor)
+        self.estimator = copy.deepcopy(actor_critic.estimator.encoder)
+        self.terrain_encoder = copy.deepcopy(actor_critic.terrain_encoder)
+        self.num_one_step_obs = actor_critic.num_one_step_obs
+        self.actor_proprioceptive_obs_length = actor_critic.actor_proprioceptive_obs_length
+        self.num_height_points = actor_critic.num_height_points
+
+    def forward(self, obs_history):
+        parts = self.estimator(obs_history[:, 0:self.actor_proprioceptive_obs_length])
+        vel, z = parts[..., :3], parts[..., 3:]
+        z = F.normalize(z, dim=-1, p=2.0)
+        terrain_input = obs_history[:, -(self.num_height_points + self.num_one_step_obs):]
+        terrain_latent = self.terrain_encoder(terrain_input)
+        latest_obs = obs_history[:, -(self.num_height_points + self.num_one_step_obs):-self.num_height_points]
+        actor_input = torch.cat((latest_obs, vel, z, terrain_latent), dim=1)
+        return self.actor(actor_input)
+
+    def export(self, path, filename='policy.pt'):
+        os.makedirs(path, exist_ok=True)
+        path = os.path.join(path, filename)
         self.to('cpu')
         traced_script_module = torch.jit.script(self)
         traced_script_module.save(path)

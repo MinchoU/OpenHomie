@@ -72,6 +72,12 @@ B. Install this repository:
 You can train your own policy with our code by running the command below.
 ```
 python legged_gym/legged_gym/scripts/train.py --task g1 --num_envs 4096 --headless --run_name my_policy --rl_device cuda:0 --sim_device cuda:0
+
+python legged_gym/legged_gym/scripts/train.py --task g1_43dof --num_envs 4096 --headless --run_name g1_43 --rl_device cuda:0 --sim_device cuda:0 --viser
+
+python legged_gym/legged_gym/scripts/train.py --task g1_43dof_rough --num_envs 4096 --headless --run_name g1_43_rough --rl_device cuda:0 --sim_device cuda:0 --viser
+
+python legged_gym/legged_gym/scripts/train.py --task g1_43dof_nohandobs_rough --num_envs 4096 --headless --run_name g1_43_nohandobs_rough_rewardtune --rl_device cuda:0 --sim_device cuda:0 --viser --reward_scale tracking_x_vel=3.0 --reward_scale tracking_y_vel=2.0 --reward_scale tracking_ang_vel=10.0
 ```
 The meanings of the parameters in this command are listed below:
 * `--task`: the training task
@@ -91,7 +97,11 @@ Once you train a policy, you can first set the [resume_path](https://github.com/
 ```
 python legged_gym/legged_gym/scripts/play.py --num_envs 32 --task g1 --resume
 ```
-Then you can view the performance of your trained policy.
+
+```
+python legged_gym/legged_gym/scripts/play.py --num_envs 32 --task g1_43dof_nohandobs_rough --resume --load_run Apr08_14-03-33_g1_43_rough_nohandobs --checkpoint 2000 --viser --export_policy
+```
+
 ### Export Policy
 We provide a script for you to export you `.pt` checkpoint to `.onnx`, which can be used by our [deployment code](). You can set the [pt_path]() and [export_path]() to what you need, and run
 ```

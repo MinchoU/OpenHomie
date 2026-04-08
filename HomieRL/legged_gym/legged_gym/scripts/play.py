@@ -41,6 +41,42 @@ import numpy as np
 import torch
 
 
+def _checkpoint_iteration(checkpoint_path):
+    checkpoint_name = os.path.basename(checkpoint_path)
+    model_prefix = "model_"
+    if not checkpoint_name.startswith(model_prefix) or not checkpoint_name.endswith(".pt"):
+        raise ValueError(f"Cannot infer checkpoint iteration from: {checkpoint_path}")
+    return checkpoint_name[len(model_prefix):-len(".pt")]
+
+
+def export_policy(actor_critic, checkpoint_path, dummy_input):
+    iteration = _checkpoint_iteration(checkpoint_path)
+    path = os.path.join(os.path.dirname(checkpoint_path), 'exported')
+    jit_name = f'policy_{iteration}.pt'
+    export_policy_as_jit(actor_critic, path, jit_name)
+    jit_path = os.path.join(path, jit_name)
+    onnx_path = os.path.join(path, os.path.splitext(jit_name)[0] + '.onnx')
+    jit_model = torch.jit.load(jit_path, map_location='cpu')
+    try:
+        import onnx  # noqa: F401
+    except ImportError as exc:
+        raise ImportError("ONNX export requires the `onnx` package. Install it with `pip install onnx`.") from exc
+    torch.onnx.export(
+        jit_model,
+        dummy_input,
+        onnx_path,
+        export_params=True,
+        opset_version=11,
+        do_constant_folding=True,
+        input_names=['input'],
+        output_names=['output'],
+        dynamic_axes={'input': {0: 'batch_size'}, 'output': {0: 'batch_size'}},
+    )
+    print('Exported policy as jit script to: ', jit_path)
+    print('Exported policy as onnx to: ', onnx_path)
+    print('Exported policy directory: ', path)
+
+
 def load_policy():
     body = torch.jit.load("", map_location="cuda:0")
     def policy(obs):
@@ -57,6 +93,8 @@ def load_onnx_policy():
     return run_inference
 
 def play(args, x_vel=0.0, y_vel=0.0, yaw_vel=0.0, height=0.74):
+    if getattr(args, "viser", False):
+        args.headless = True
 
     env_cfg, train_cfg = task_registry.get_cfgs(name=args.task)
     env_cfg.env.num_envs = min(env_cfg.env.num_envs, 50)
@@ -90,10 +128,11 @@ def play(args, x_vel=0.0, y_vel=0.0, yaw_vel=0.0, height=0.74):
     
     # policy = load_onnx_policy() # Use this to load from exported onnx file
     
-    if EXPORT_POLICY:
-        path = os.path.join(LEGGED_GYM_ROOT_DIR, 'logs', train_cfg.runner.experiment_name, 'exported', 'policies')
-        export_policy_as_jit(ppo_runner.alg.actor_critic, path)
-        print('Exported policy as jit script to: ', path)
+    if getattr(args, "export_policy", False):
+        checkpoint_path = getattr(ppo_runner, "loaded_model_path", None)
+        if checkpoint_path is None:
+            raise RuntimeError("Cannot export policy without a loaded checkpoint path.")
+        export_policy(ppo_runner.alg.actor_critic, checkpoint_path, obs[:1].detach().cpu())
     print(policy)
     camera_position = np.array(env_cfg.viewer.pos, dtype=np.float64)
     camera_vel = np.array([1., 1., 0.])
@@ -112,7 +151,6 @@ def play(args, x_vel=0.0, y_vel=0.0, yaw_vel=0.0, height=0.74):
             env.set_camera(camera_position, camera_position + camera_direction)
 
 if __name__ == '__main__':
-    EXPORT_POLICY = True
     RECORD_FRAMES = False
     MOVE_CAMERA = False
     args = get_args()
