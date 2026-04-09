@@ -323,6 +323,34 @@ class G143dofRoughTerrainCfgPPO( G143dofRoughCfgPPO ):
         experiment_name = 'g1_43dof_rough'
 
 
+class G143dofRoughCustomTerrainCfg( G143dofRoughTerrainCfg ):
+    class env( G143dofRoughTerrainCfg.env ):
+        num_height_points = G143dofRoughTerrainCfg.env.num_height_points
+        num_one_step_observations = G143dofRoughTerrainCfg.env.num_one_step_observations
+        num_one_step_privileged_obs = G143dofRoughTerrainCfg.env.num_one_step_privileged_obs + 1
+        num_observations = G143dofRoughTerrainCfg.env.num_observations
+        num_privileged_obs = G143dofRoughTerrainCfg.env.num_critic_history * num_one_step_privileged_obs + num_height_points
+
+    class rewards( G143dofRoughCfg.rewards ):
+        class scales( G143dofRoughCfg.rewards.scales ):
+            foothold = -1.0
+
+        foothold_grid_x = [-0.06, 0.12, 5]
+        foothold_grid_y = [-0.04, 0.04, 3]
+        foothold_grid_z = -0.04
+        foothold_height_tolerance = 0.025
+        foothold_min_coverage = 0.9
+        foothold_contact_force = 5.0
+        rough_reward_gating_enabled = True
+        rough_reward_gating_height_diff_threshold = 0.2
+        rough_reward_gating_tracking_base_height_scale = 0.1
+
+
+class G143dofRoughCustomTerrainCfgPPO( G143dofRoughCfgPPO ):
+    class runner( G143dofRoughCfgPPO.runner ):
+        experiment_name = 'g1_43dof_rough_custom'
+
+
 class G143dofNoHandObsRoughCfg( G143dofRoughCfg ):
     class env( G143dofRoughCfg.env ):
         observe_hand_joints = False
@@ -358,3 +386,20 @@ class G143dofNoHandObsRoughTerrainCfg( G143dofNoHandObsRoughCfg ):
 class G143dofNoHandObsRoughTerrainCfgPPO( G143dofNoHandObsRoughCfgPPO ):
     class runner( G143dofNoHandObsRoughCfgPPO.runner ):
         experiment_name = 'g1_43dof_nohandobs_rough'
+
+
+class G143dofNoHandObsRoughCustomTerrainCfg( G143dofNoHandObsRoughTerrainCfg ):
+    class env( G143dofNoHandObsRoughTerrainCfg.env ):
+        num_height_points = G143dofNoHandObsRoughTerrainCfg.env.num_height_points
+        num_one_step_observations = G143dofNoHandObsRoughTerrainCfg.env.num_one_step_observations
+        num_one_step_privileged_obs = G143dofNoHandObsRoughTerrainCfg.env.num_one_step_privileged_obs + 1
+        num_observations = G143dofNoHandObsRoughTerrainCfg.env.num_observations
+        num_privileged_obs = G143dofNoHandObsRoughTerrainCfg.env.num_critic_history * num_one_step_privileged_obs + num_height_points
+
+    class rewards( G143dofRoughCustomTerrainCfg.rewards ):
+        pass
+
+
+class G143dofNoHandObsRoughCustomTerrainCfgPPO( G143dofNoHandObsRoughCfgPPO ):
+    class runner( G143dofNoHandObsRoughCfgPPO.runner ):
+        experiment_name = 'g1_43dof_nohandobs_rough_custom'

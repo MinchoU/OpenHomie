@@ -298,6 +298,9 @@ class LeggedRobot(BaseTask):
             self.extras["episode"]["terrain_level_max"] = torch.max(terrain_levels_float)
             for level in range(self.max_terrain_level):
                 self.extras["episode"][f"terrain_level_{level}_ratio"] = torch.mean((self.terrain_levels == level).float())
+        if getattr(self.cfg.rewards, "rough_reward_gating_enabled", False) and hasattr(self, "measured_heights"):
+            rough_gate = self._get_rough_reward_gate()
+            self.extras["episode"]["rough_reward_gate_ratio"] = torch.mean(rough_gate.float())
         if self.actor_use_height and hasattr(self, "measured_heights") and self.scandot_raw_count.item() > 0.0:
             self.extras["episode"]["scandot_raw_min"] = self.scandot_raw_current_min
             self.extras["episode"]["scandot_raw_max"] = self.scandot_raw_current_max
@@ -365,6 +368,8 @@ class LeggedRobot(BaseTask):
                 heights += (2 * torch.rand_like(heights) - 1) * self.height_noise_scale
             self.obs_buf = torch.cat((self.obs_buf, heights), dim=-1)
         current_critic_obs = torch.cat((current_obs, self.base_lin_vel * self.obs_scales.lin_vel), dim=-1)
+        if getattr(self.cfg.rewards, "rough_reward_gating_enabled", False):
+            current_critic_obs = torch.cat((current_critic_obs, self._get_rough_reward_gate_feature()), dim=-1)
         self.privileged_obs_buf = torch.cat((self.privileged_obs_buf[:, self.num_one_step_privileged_obs:self.critic_proprioceptive_obs_length], current_critic_obs), dim=-1)
         if self.actor_use_height:
             self.privileged_obs_buf = torch.cat((self.privileged_obs_buf, critic_heights), dim=-1)
@@ -387,6 +392,8 @@ class LeggedRobot(BaseTask):
         if self.add_noise:
             current_obs += (2 * torch.rand_like(current_obs) - 1) * self.noise_scale_vec[:current_obs.shape[1]]
         current_critic_obs = torch.cat((current_obs, self.base_lin_vel * self.obs_scales.lin_vel), dim=-1)
+        if getattr(self.cfg.rewards, "rough_reward_gating_enabled", False):
+            current_critic_obs = torch.cat((current_critic_obs, self._get_rough_reward_gate_feature()), dim=-1)
         termination_obs = torch.cat((self.privileged_obs_buf[:, self.num_one_step_privileged_obs:self.critic_proprioceptive_obs_length], current_critic_obs), dim=-1)
         if self.actor_use_height:
             heights = torch.clip(self.root_states[:, 2].unsqueeze(1) - 0.5 - self.measured_heights, -1.0, 1.0)
@@ -928,6 +935,8 @@ class LeggedRobot(BaseTask):
             self.scandot_raw_mean = torch.tensor(0.0, device=self.device)
             self.scandot_raw_m2 = torch.tensor(0.0, device=self.device)
             self.scandot_raw_count = torch.tensor(0.0, device=self.device)
+        if hasattr(self.cfg.rewards, "foothold_grid_x"):
+            self.foothold_points = self._init_foothold_points()
         self.noise_scale_vec = self._get_noise_scale_vec(self.cfg)
 
         # joint positions offsets and PD gains
@@ -1332,6 +1341,46 @@ class LeggedRobot(BaseTask):
             points[:, :, 2] = self.measured_heights
         return points
 
+    def _init_foothold_points(self):
+        grid_x = self.cfg.rewards.foothold_grid_x
+        grid_y = self.cfg.rewards.foothold_grid_y
+        x = torch.linspace(grid_x[0], grid_x[1], int(grid_x[2]), device=self.device, requires_grad=False)
+        y = torch.linspace(grid_y[0], grid_y[1], int(grid_y[2]), device=self.device, requires_grad=False)
+        grid_x, grid_y = torch.meshgrid(x, y, indexing="ij")
+        points = torch.zeros(grid_x.numel(), 3, device=self.device, requires_grad=False)
+        points[:, 0] = grid_x.flatten()
+        points[:, 1] = grid_y.flatten()
+        points[:, 2] = self.cfg.rewards.foothold_grid_z
+        return points
+
+    def _sample_terrain_heights_at_points(self, points):
+        if self.cfg.terrain.mesh_type == "plane":
+            return torch.zeros(points.shape[:-1], device=self.device, requires_grad=False)
+        if self.cfg.terrain.mesh_type == "none":
+            raise NameError("Can't measure height with terrain mesh type 'none'")
+
+        sample_points = points + self.terrain.cfg.border_size
+        sample_points = (sample_points / self.terrain.cfg.horizontal_scale).long()
+        px = torch.clip(sample_points[..., 0].reshape(-1), 0, self.height_samples.shape[0] - 2)
+        py = torch.clip(sample_points[..., 1].reshape(-1), 0, self.height_samples.shape[1] - 2)
+
+        heights1 = self.height_samples[px, py]
+        heights2 = self.height_samples[px + 1, py]
+        heights3 = self.height_samples[px, py + 1]
+        heights = torch.min(torch.min(heights1, heights2), heights3)
+        return heights.view(points.shape[:-1]) * self.terrain.cfg.vertical_scale
+
+    def _get_rough_reward_gate(self):
+        if not getattr(self.cfg.rewards, "rough_reward_gating_enabled", False):
+            return torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        if not hasattr(self, "measured_heights"):
+            return torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        terrain_span = self.measured_heights.max(dim=1).values - self.measured_heights.min(dim=1).values
+        return terrain_span >= self.cfg.rewards.rough_reward_gating_height_diff_threshold
+
+    def _get_rough_reward_gate_feature(self):
+        return self._get_rough_reward_gate().float().unsqueeze(1)
+
     def _parse_cfg(self, cfg):
         self.dt = self.cfg.control.decimation * self.sim_params.dt
         self.obs_scales = self.cfg.normalization.obs_scales
@@ -1427,7 +1476,9 @@ class LeggedRobot(BaseTask):
     
     def _reward_lin_vel_z(self):
         # Penalize z axis base linear velocity
-        return torch.square(self.base_lin_vel[:, 2]) *  (self.commands[:, 4] >= 0.735)
+        rew = torch.square(self.base_lin_vel[:, 2]) *  (self.commands[:, 4] >= 0.735)
+        rough_gate = self._get_rough_reward_gate()
+        return rew * (~rough_gate).float()
     
     def _reward_ang_vel_xy(self):
         # Penalize xy axes base angular velocity
@@ -1446,13 +1497,22 @@ class LeggedRobot(BaseTask):
         base_height_r = self.root_states[:, 2] - self.feet_pos[:, 1, 2]
         base_height = torch.max(base_height_l, base_height_r)
         height_error = torch.abs(base_height - self.commands[:, 4] + self.cfg.asset.ankle_sole_distance)
-        return torch.exp(-height_error * 4)
+        rew = torch.exp(-height_error * 4)
+        rough_gate = self._get_rough_reward_gate()
+        rough_scale = getattr(self.cfg.rewards, "rough_reward_gating_tracking_base_height_scale", 0.1)
+        return rew * torch.where(
+            rough_gate,
+            torch.full_like(rew, rough_scale),
+            torch.ones_like(rew),
+        )
     
     def _reward_deviation_hip_joint(self):
         return torch.sum(torch.square(self.dof_pos - self.default_dof_pos)[:, self.hip_joint_indices], dim=-1) *  (self.commands[:, 4] >= 0.735)
     
     def _reward_deviation_ankle_joint(self):
-        return torch.sum(torch.square(self.dof_pos - self.default_dof_pos)[:, self.ankle_joint_indices], dim=-1) *  (self.commands[:, 4] >= 0.735)
+        rew = torch.sum(torch.square(self.dof_pos - self.default_dof_pos)[:, self.ankle_joint_indices], dim=-1) *  (self.commands[:, 4] >= 0.735)
+        rough_gate = self._get_rough_reward_gate()
+        return rew * (~rough_gate).float()
     
     def _reward_deviation_knee_joint(self):
         base_height_l = self.root_states[:, 2] - self.feet_pos[:, 0, 2]
@@ -1462,7 +1522,9 @@ class LeggedRobot(BaseTask):
         knee_action_min = self.default_dof_pos[:, self.knee_joint_indices] + self.cfg.control.action_scale * self.action_min[:, self.knee_joint_indices]
         knee_action_max = self.default_dof_pos[:, self.knee_joint_indices] + self.cfg.control.action_scale * self.action_max[:, self.knee_joint_indices]
         joint_deviation = (self.dof_pos[:, self.knee_joint_indices] - knee_action_min) / (knee_action_max - knee_action_min) # always positive
-        return torch.sum(torch.abs((joint_deviation-0.5) * height_error.unsqueeze(-1)), dim=-1)
+        rew = torch.sum(torch.abs((joint_deviation-0.5) * height_error.unsqueeze(-1)), dim=-1)
+        rough_gate = self._get_rough_reward_gate()
+        return rew * (~rough_gate).float()
     
     def _reward_dof_acc(self):
         # Penalize dof accelerations
@@ -1489,7 +1551,9 @@ class LeggedRobot(BaseTask):
         feet_height, feet_height_var = self._get_feet_heights()
         height_error = torch.square(feet_height - self.cfg.rewards.clearance_height_target).view(self.num_envs, -1)
         feet_leteral_vel = torch.sqrt(torch.sum(torch.square(feetvel_in_body_frame[:, :, :2]), dim=2)).view(self.num_envs, -1)
-        return torch.sum(height_error * feet_leteral_vel, dim=1) * (self.commands[:, 4]>=0.71)
+        rew = torch.sum(height_error * feet_leteral_vel, dim=1) * (self.commands[:, 4]>=0.71)
+        rough_gate = self._get_rough_reward_gate()
+        return rew * (~rough_gate).float()
     
     def _reward_feet_distance_lateral(self):
         cur_footpos_translated = self.feet_pos - self.root_states[:, 0:3].unsqueeze(1)
@@ -1497,7 +1561,9 @@ class LeggedRobot(BaseTask):
         for i in range(len(self.feet_indices)):
             footpos_in_body_frame[:, i, :] = quat_rotate_inverse(self.base_quat, cur_footpos_translated[:, i, :])
         foot_leteral_dis = torch.abs(footpos_in_body_frame[:, 0, 1] - footpos_in_body_frame[:, 1, 1])
-        return torch.clamp(foot_leteral_dis - self.cfg.rewards.least_feet_distance_lateral, max=0) + torch.clamp(-foot_leteral_dis + self.cfg.rewards.most_feet_distance_lateral, max=0) * (self.commands[:, 4] >= 0.735)
+        rew = torch.clamp(foot_leteral_dis - self.cfg.rewards.least_feet_distance_lateral, max=0) + torch.clamp(-foot_leteral_dis + self.cfg.rewards.most_feet_distance_lateral, max=0) * (self.commands[:, 4] >= 0.735)
+        rough_gate = self._get_rough_reward_gate()
+        return rew * (~rough_gate).float()
     
     def _reward_knee_distance_lateral(self):
         cur_knee_pos_translated = self.rigid_body_states[:, self.knee_indices, :3].clone() - self.root_states[:, 0:3].unsqueeze(1)
@@ -1505,19 +1571,25 @@ class LeggedRobot(BaseTask):
         for i in range(len(self.knee_indices)):
             knee_pos_in_body_frame[:, i, :] = quat_rotate_inverse(self.base_quat, cur_knee_pos_translated[:, i, :])
         knee_lateral_dis = torch.abs(knee_pos_in_body_frame[:, 0, 1] - knee_pos_in_body_frame[:, 2, 1]) + torch.abs(knee_pos_in_body_frame[:, 1, 1] - knee_pos_in_body_frame[:, 3, 1])
-        return torch.clamp(knee_lateral_dis - self.cfg.rewards.least_knee_distance_lateral * 2, max=0) + torch.clamp(-knee_lateral_dis + self.cfg.rewards.most_knee_distance_lateral * 2, max=0) * (self.commands[:, 4] >= 0.735)
+        rew = torch.clamp(knee_lateral_dis - self.cfg.rewards.least_knee_distance_lateral * 2, max=0) + torch.clamp(-knee_lateral_dis + self.cfg.rewards.most_knee_distance_lateral * 2, max=0) * (self.commands[:, 4] >= 0.735)
+        rough_gate = self._get_rough_reward_gate()
+        return rew * (~rough_gate).float()
     
     def _reward_feet_ground_parallel(self):
         feet_heights, feet_heights_var = self._get_feet_heights()
         continue_contact = (self.feet_air_time >= 3* self.dt) * self.contact_filt
-        return torch.sum(feet_heights_var * continue_contact, dim=1)
+        rew = torch.sum(feet_heights_var * continue_contact, dim=1)
+        rough_gate = self._get_rough_reward_gate()
+        return rew * (~rough_gate).float()
     
     def _reward_feet_parallel(self):
         left_foot_pos = self.rigid_body_states[:, self.left_foot_indices[0:3], :3].clone()
         right_foot_pos = self.rigid_body_states[:, self.right_foot_indices[0:3], :3].clone()
         feet_distances = torch.norm(left_foot_pos - right_foot_pos, dim=2)
         feet_distances_var = torch.var(feet_distances, dim=1)
-        return feet_distances_var * (self.commands[:, 4] >= 0.735)
+        rew = feet_distances_var * (self.commands[:, 4] >= 0.735)
+        rough_gate = self._get_rough_reward_gate()
+        return rew * (~rough_gate).float()
     
     def _reward_smoothness(self):
         # second order smoothness
@@ -1566,6 +1638,23 @@ class LeggedRobot(BaseTask):
     def _reward_feet_contact_forces(self):
         # penalize high contact forces
         return torch.sum((torch.norm(self.contact_forces[:, self.feet_indices, :], dim=-1) -  self.cfg.rewards.max_contact_force).clip(min=0.), dim=1)
+
+    def _reward_foothold(self):
+        offsets = self.foothold_points.view(1, 1, -1, 3)
+        num_feet = self.feet_indices.shape[0]
+        foot_quat = self.feet_quat.unsqueeze(2).repeat(1, 1, offsets.shape[2], 1)
+        foot_offsets = offsets.repeat(self.num_envs, num_feet, 1, 1)
+        world_points = self.feet_pos.unsqueeze(2) + quat_apply(
+            foot_quat.reshape(-1, 4),
+            foot_offsets.reshape(-1, 3),
+        ).view(self.num_envs, num_feet, -1, 3)
+        terrain_heights = self._sample_terrain_heights_at_points(world_points)
+        height_error = torch.abs(world_points[..., 2] - terrain_heights)
+        valid_coverage = (height_error <= self.cfg.rewards.foothold_height_tolerance).float().mean(dim=-1)
+
+        contact = self.contact_forces[:, self.feet_indices, 2] > self.cfg.rewards.foothold_contact_force
+        coverage_error = torch.relu(self.cfg.rewards.foothold_min_coverage - valid_coverage)
+        return torch.sum(coverage_error * contact.float(), dim=1)
     
     def _reward_contact_momentum(self):
         # encourage soft contacts
