@@ -316,3 +316,29 @@ class G1RoughTerrainCfg( G1RoughCfg ):
 class G1RoughTerrainCfgPPO( G1RoughCfgPPO ):
     class runner( G1RoughCfgPPO.runner ):
         experiment_name = 'g1_rough'
+
+class G1RoughCustomTerrainCfg( G1RoughTerrainCfg ):
+    class env( G1RoughTerrainCfg.env ):
+        num_height_points = G1RoughTerrainCfg.env.num_height_points
+        num_one_step_observations = G1RoughTerrainCfg.env.num_one_step_observations
+        num_one_step_privileged_obs = G1RoughTerrainCfg.env.num_one_step_privileged_obs + 1
+        num_observations = G1RoughTerrainCfg.env.num_observations
+        num_privileged_obs = G1RoughTerrainCfg.env.num_critic_history * num_one_step_privileged_obs + num_height_points
+
+    class rewards( G1RoughCfg.rewards ):
+        class scales( G1RoughCfg.rewards.scales ):
+            foothold = -0.5
+
+        foothold_grid_x = [-0.06, 0.12, 5]
+        foothold_grid_y = [-0.04, 0.04, 3]
+        foothold_grid_z = -0.04
+        foothold_height_tolerance = 0.025
+        foothold_min_coverage = 0.9
+        foothold_contact_force = 5.0
+        rough_reward_gating_enabled = True
+        rough_reward_gating_height_diff_threshold = 0.2
+        rough_reward_gating_tracking_base_height_scale = 0.1
+
+class G1RoughCustomTerrainCfgPPO( G1RoughCfgPPO ):
+    class runner( G1RoughCfgPPO.runner ):
+        experiment_name = 'g1_rough_custom'
