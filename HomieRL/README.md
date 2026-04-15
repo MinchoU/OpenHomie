@@ -80,6 +80,8 @@ python legged_gym/legged_gym/scripts/train.py --task g1_43dof --num_envs 4096 --
 python legged_gym/legged_gym/scripts/train.py --task g1_43dof_rough --num_envs 4096 --headless --run_name g1_43_rough --rl_device cuda:0 --sim_device cuda:0 --viser
 
 python legged_gym/legged_gym/scripts/train.py --task g1_43dof_nohandobs_rough --num_envs 4096 --headless --run_name g1_43_nohandobs_rough_rewardtune --rl_device cuda:0 --sim_device cuda:0 --viser --reward_scale tracking_x_vel=3.0 --reward_scale tracking_y_vel=2.0 --reward_scale tracking_ang_vel=10.0
+
+python legged_gym/legged_gym/scripts/train.py --task g1_rough_custom3 --num_envs 4096 --headless --run_name g1_rough_custom3 --rl_device cuda:0 --sim_device cuda:0 --viser
 ```
 The meanings of the parameters in this command are listed below:
 * `--task`: the training task

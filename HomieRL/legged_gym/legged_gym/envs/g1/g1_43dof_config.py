@@ -333,7 +333,7 @@ class G143dofRoughCustomTerrainCfg( G143dofRoughTerrainCfg ):
 
     class rewards( G143dofRoughCfg.rewards ):
         class scales( G143dofRoughCfg.rewards.scales ):
-            foothold = -1.0
+            foothold = -0.2
 
         foothold_grid_x = [-0.06, 0.12, 5]
         foothold_grid_y = [-0.04, 0.04, 3]
@@ -403,3 +403,47 @@ class G143dofNoHandObsRoughCustomTerrainCfg( G143dofNoHandObsRoughTerrainCfg ):
 class G143dofNoHandObsRoughCustomTerrainCfgPPO( G143dofNoHandObsRoughCfgPPO ):
     class runner( G143dofNoHandObsRoughCfgPPO.runner ):
         experiment_name = 'g1_43dof_nohandobs_rough_custom'
+
+
+class G143dofNoHandObsRoughCustom4TerrainCfg( G143dofNoHandObsRoughTerrainCfg ):
+    """custom3 variant using 29 observed DOFs (waist freed) instead of 27.
+
+    Based on g1_rough_custom3 (custom2 terrain gating + foothold reward + rough gating),
+    but swapped to the 43dof-nohandobs robot so all 3 waist joints are active:
+    - 43 DOF robot, hand joints excluded from obs → 29 observed DOFs (12 legs + 3 waist + 14 arm/wrist)
+    - Terrain curriculum gated on action curriculum completion (all agents spawn at level 0)
+    - foothold reward + rough_reward_gating
+    """
+    class env( G143dofNoHandObsRoughTerrainCfg.env ):
+        num_height_points = G143dofNoHandObsRoughTerrainCfg.env.num_height_points
+        num_one_step_observations = G143dofNoHandObsRoughTerrainCfg.env.num_one_step_observations
+        num_one_step_privileged_obs = G143dofNoHandObsRoughTerrainCfg.env.num_one_step_privileged_obs + 1
+        num_observations = G143dofNoHandObsRoughTerrainCfg.env.num_observations
+        num_privileged_obs = G143dofNoHandObsRoughTerrainCfg.env.num_critic_history * num_one_step_privileged_obs + num_height_points
+
+    class terrain( G143dofNoHandObsRoughTerrainCfg.terrain ):
+        mesh_type = 'trimesh'
+        curriculum = True
+        max_init_terrain_level = 0  # all agents spawn at level 0 (custom2 style)
+        num_rows = 10
+        num_cols = 20
+        terrain_proportions = [0.1, 0.2, 0.3, 0.3, 0.1]
+
+    class rewards( G143dofRoughCfg.rewards ):
+        class scales( G143dofRoughCfg.rewards.scales ):
+            foothold = -0.2
+
+        foothold_grid_x = [-0.06, 0.12, 5]
+        foothold_grid_y = [-0.04, 0.04, 3]
+        foothold_grid_z = -0.04
+        foothold_height_tolerance = 0.025
+        foothold_min_coverage = 0.9
+        foothold_contact_force = 5.0
+        rough_reward_gating_enabled = True
+        rough_reward_gating_height_diff_threshold = 0.2
+        rough_reward_gating_tracking_base_height_scale = 0.1
+
+
+class G143dofNoHandObsRoughCustom4TerrainCfgPPO( G143dofNoHandObsRoughCfgPPO ):
+    class runner( G143dofNoHandObsRoughCfgPPO.runner ):
+        experiment_name = 'g1_43dof_nohandobs_rough_custom4'

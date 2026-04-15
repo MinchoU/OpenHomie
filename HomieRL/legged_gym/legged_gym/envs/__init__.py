@@ -30,12 +30,17 @@
 
 from legged_gym import LEGGED_GYM_ROOT_DIR, LEGGED_GYM_ENVS_DIR
 from .base.legged_robot import LeggedRobot
+from .g1.g1_rough_custom2 import G1RoughCustom2
 
 from legged_gym.envs.g1.g1_29dof_config import (
     G1RoughCfg,
     G1RoughCfgPPO,
     G1RoughCustomTerrainCfg,
     G1RoughCustomTerrainCfgPPO,
+    G1RoughCustom2TerrainCfg,
+    G1RoughCustom2TerrainCfgPPO,
+    G1RoughCustom3TerrainCfg,
+    G1RoughCustom3TerrainCfgPPO,
     G1RoughTerrainCfg,
     G1RoughTerrainCfgPPO,
 )
@@ -44,6 +49,8 @@ from legged_gym.envs.g1.g1_43dof_config import (
     G143dofNoHandObsRoughCfgPPO,
     G143dofNoHandObsRoughCustomTerrainCfg,
     G143dofNoHandObsRoughCustomTerrainCfgPPO,
+    G143dofNoHandObsRoughCustom4TerrainCfg,
+    G143dofNoHandObsRoughCustom4TerrainCfgPPO,
     G143dofNoHandObsRoughTerrainCfg,
     G143dofNoHandObsRoughTerrainCfgPPO,
     G143dofRoughCfg,
@@ -60,9 +67,12 @@ from legged_gym.utils.task_registry import task_registry
 task_registry.register( "g1", LeggedRobot, G1RoughCfg(), G1RoughCfgPPO() )
 task_registry.register( "g1_rough", LeggedRobot, G1RoughTerrainCfg(), G1RoughTerrainCfgPPO() )
 task_registry.register( "g1_rough_custom", LeggedRobot, G1RoughCustomTerrainCfg(), G1RoughCustomTerrainCfgPPO() )
+task_registry.register( "g1_rough_custom2", G1RoughCustom2, G1RoughCustom2TerrainCfg(), G1RoughCustom2TerrainCfgPPO() )
+task_registry.register( "g1_rough_custom3", G1RoughCustom2, G1RoughCustom3TerrainCfg(), G1RoughCustom3TerrainCfgPPO() )
 task_registry.register( "g1_43dof", LeggedRobot, G143dofRoughCfg(), G143dofRoughCfgPPO() )
 task_registry.register( "g1_43dof_rough", LeggedRobot, G143dofRoughTerrainCfg(), G143dofRoughTerrainCfgPPO() )
 task_registry.register( "g1_43dof_rough_custom", LeggedRobot, G143dofRoughCustomTerrainCfg(), G143dofRoughCustomTerrainCfgPPO() )
 task_registry.register( "g1_43dof_nohandobs", LeggedRobot, G143dofNoHandObsRoughCfg(), G143dofNoHandObsRoughCfgPPO() )
 task_registry.register( "g1_43dof_nohandobs_rough", LeggedRobot, G143dofNoHandObsRoughTerrainCfg(), G143dofNoHandObsRoughTerrainCfgPPO() )
 task_registry.register( "g1_43dof_nohandobs_rough_custom", LeggedRobot, G143dofNoHandObsRoughCustomTerrainCfg(), G143dofNoHandObsRoughCustomTerrainCfgPPO() )
+task_registry.register( "g1_43dof_nohandobs_rough_custom4", G1RoughCustom2, G143dofNoHandObsRoughCustom4TerrainCfg(), G143dofNoHandObsRoughCustom4TerrainCfgPPO() )
