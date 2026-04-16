@@ -93,6 +93,7 @@ class LeggedRobot(BaseTask):
         self.height_samples = None
         self.spawn_height_offset = 0.05
         self.debug_viz = False
+        self.training_debug = getattr(cfg, 'debug', False)
         self.init_done = False
         self.viser_visualizer = None
         self._parse_cfg(self.cfg)
@@ -132,6 +133,17 @@ class LeggedRobot(BaseTask):
         actions = torch.cat((actions, self.current_upper_actions), dim=-1)
         self.actions = torch.clip(actions, -clip_actions, clip_actions).to(self.device)
         self.origin_actions[:] = self.actions[:]
+        # --- DEBUG checkpoint 1: raw action magnitude ---
+        # if self.training_debug:
+        #     _raw_max = actions[:, :self.num_lower_dof].abs().max().item()
+        #     _clip_frac = (actions[:, :self.num_lower_dof].abs() > clip_actions * 0.9).float().mean().item()
+        #     if _raw_max > 10.0 or _clip_frac > 0.01:
+        #         _worst_env = actions[:, :self.num_lower_dof].abs().max(dim=1).values.argmax().item()
+        #         _worst_joint = actions[_worst_env, :self.num_lower_dof].abs().argmax().item()
+        #         print(f"[DEBUG:actions] step={self.common_step_counter} raw_max={_raw_max:.2f} "
+        #               f"clip_frac={_clip_frac:.4f} worst_env={_worst_env} worst_joint={_worst_joint} "
+        #               f"action_vals={actions[_worst_env, :self.num_lower_dof].tolist()}")
+        #         breakpoint()
         self.delayed_actions = self.actions.clone().view(1, self.num_envs, self.num_actions).repeat(self.cfg.control.decimation, 1, 1)
         delay_steps = torch.randint(0, self.cfg.control.decimation, (self.num_envs, 1), device=self.device)
         if self.cfg.domain_rand.delay:
@@ -157,6 +169,23 @@ class LeggedRobot(BaseTask):
 
         # return clipped obs, clipped states (None), rewards, dones and infos
         clip_obs = self.cfg.normalization.clip_observations
+        # # --- DEBUG checkpoint 3: pre-clip observation OOD ---
+        # if self.training_debug:
+        #     _pre_actor = self.obs_buf.abs().max().item()
+        #     _pre_critic = self.privileged_obs_buf.abs().max().item() if self.privileged_obs_buf is not None else 0
+        #     _nan_actor = torch.isnan(self.obs_buf).any().item()
+        #     _nan_critic = (torch.isnan(self.privileged_obs_buf).any().item()
+        #                    if self.privileged_obs_buf is not None else False)
+        #     if _pre_actor > 20.0 or _pre_critic > 20.0 or _nan_actor or _nan_critic:
+        #         _worst_env_a = self.obs_buf.abs().max(dim=1).values.argmax().item()
+        #         _worst_env_c = (self.privileged_obs_buf.abs().max(dim=1).values.argmax().item()
+        #                         if self.privileged_obs_buf is not None else -1)
+        #         print(f"[DEBUG:obs] step={self.common_step_counter} "
+        #               f"actor_max={_pre_actor:.1f}(env={_worst_env_a}) "
+        #               f"critic_max={_pre_critic:.1f}(env={_worst_env_c}) "
+        #               f"nan_actor={_nan_actor} nan_critic={_nan_critic} "
+        #               f"clip_obs={clip_obs}")
+        #         breakpoint()
         self.obs_buf = torch.clip(self.obs_buf, -clip_obs, clip_obs)
         if self.privileged_obs_buf is not None:
             self.privileged_obs_buf = torch.clip(self.privileged_obs_buf, -clip_obs, clip_obs)
@@ -179,7 +208,21 @@ class LeggedRobot(BaseTask):
         self.base_ang_vel[:] = quat_rotate_inverse(self.base_quat, self.root_states[:, 10:13])
         self.projected_gravity[:] = quat_rotate_inverse(self.base_quat, self.gravity_vec)
         self.base_lin_acc = (self.root_states[:, 7:10] - self.last_root_vel[:, :3]) / self.dt
-        
+        # --- DEBUG checkpoint 2: dynamics explosion ---
+        if self.training_debug:
+            _dv_max = self.dof_vel.abs().max().item()
+            _blv_max = self.base_lin_vel.abs().max().item()
+            _bav_max = self.base_ang_vel.abs().max().item()
+            if _dv_max > 100.0 or _blv_max > 10.0 or _bav_max > 20.0:
+                _worst_dv_env = self.dof_vel.abs().max(dim=1).values.argmax().item()
+                _worst_blv_env = self.base_lin_vel.abs().max(dim=1).values.argmax().item()
+                print(f"[DEBUG:dynamics] step={self.common_step_counter} "
+                      f"dof_vel_max={_dv_max:.1f}(env={_worst_dv_env}) "
+                      f"base_lin_vel_max={_blv_max:.1f}(env={_worst_blv_env}) "
+                      f"base_ang_vel_max={_bav_max:.1f} "
+                      f"dof_vel[{_worst_dv_env}]={self.dof_vel[_worst_dv_env].tolist()}")
+                breakpoint()
+
         self.feet_pos[:] = self.rigid_body_states.view(self.num_envs, self.num_bodies, 13)[:, self.feet_indices, 0:3]
         self.feet_quat[:] = self.rigid_body_states.view(self.num_envs, self.num_bodies, 13)[:, self.feet_indices, 3:7]
         self.feet_vel[:] = self.rigid_body_states.view(self.num_envs, self.num_bodies, 13)[:, self.feet_indices, 7:10]
@@ -206,6 +249,39 @@ class LeggedRobot(BaseTask):
         env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
         termination_privileged_obs = self.compute_termination_observations(env_ids)
         self.reset_idx(env_ids)
+
+        # Bug in original HOMIE implementation; after reset_idx teleports robots
+        # to new positions (potentially on different terrain patches via curriculum),
+        # several derived quantities used by compute_observations remain stale from
+        # the pre-reset physics step.  This produces inconsistent first-step
+        # observations that corrupt the value function.
+        if len(env_ids) > 0:
+            # base_quat is a view of root_states[:, 3:7] so it is already
+            # updated, but base_lin_vel / base_ang_vel / projected_gravity are
+            # independent tensors computed at the top of post_physics_step and
+            # must be refreshed for the reset environments.
+            self.base_lin_vel[env_ids] = quat_rotate_inverse(
+                self.base_quat[env_ids], self.root_states[env_ids, 7:10])
+            self.base_ang_vel[env_ids] = quat_rotate_inverse(
+                self.base_quat[env_ids], self.root_states[env_ids, 10:13])
+            self.projected_gravity[env_ids] = quat_rotate_inverse(
+                self.base_quat[env_ids], self.gravity_vec[env_ids])
+
+            # rigid_body_states is not refreshed by set_actor_root_state_tensor
+            # so the IMU body still holds pre-reset orientation / angular vel.
+            # The IMU (imu_in_pelvis) is rigidly attached to the root body via a
+            # fixed joint, so its state equals the root state at any configuration.
+            self.rigid_body_states[env_ids, self.imu_index, 3:7] = \
+                self.root_states[env_ids, 3:7]
+            self.rigid_body_states[env_ids, self.imu_index, 10:13] = \
+                self.root_states[env_ids, 10:13]
+
+            # measured_heights was sampled at the pre-reset robot position.
+            # After terrain curriculum moves envs to a new patch the old
+            # heights no longer correspond to the terrain under the robot.
+            if self.cfg.terrain.measure_heights:
+                self.measured_heights = self._get_heights()
+
         self.compute_observations() # in some cases a simulation step might be required to refresh some obs (for example body positions)
 
         self.last_last_actions[:] = self.last_actions[:]

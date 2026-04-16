@@ -176,6 +176,10 @@ def update_cfg_from_args(env_cfg, cfg_train, args):
         if getattr(args, "viser_no_meshes", False):
             env_cfg.viser.show_meshes = False
         apply_reward_scale_overrides(env_cfg, getattr(args, "reward_scale", None))
+        if getattr(args, "debug", False):
+            env_cfg.debug = True
+        if getattr(args, "init_upper_ratio", None) is not None:
+            env_cfg.domain_rand.init_upper_ratio = args.init_upper_ratio
     if cfg_train is not None:
         if args.seed is not None:
             cfg_train.seed = args.seed
@@ -217,6 +221,8 @@ def get_args():
         {"name": "--viser_update_interval", "type": int, "default": None, "help": "Number of env steps between viser updates."},
         {"name": "--viser_no_meshes", "action": "store_true", "default": False, "help": "Render the viser robot without visual meshes."},
         {"name": "--reward_scale", "action": "append", "default": None, "help": "Override a reward scale as key=value. Can be passed multiple times."},
+        {"name": "--debug", "action": "store_true", "default": False, "help": "Enable training debug checkpoints (breakpoints on NaN/exploding values)."},
+        {"name": "--init_upper_ratio", "type": float, "default": None, "help": "Override init_upper_ratio (action curriculum starting point). Use 1.0 to skip curriculum on resume."},
     ]
     # parse arguments
     args = gymutil.parse_arguments(

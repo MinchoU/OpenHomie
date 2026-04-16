@@ -81,6 +81,7 @@ class HIMPPO:
         self.lam = lam
         self.max_grad_norm = max_grad_norm
         self.use_clipped_value_loss = use_clipped_value_loss
+        self.training_debug = False  # set by runner when --debug is passed
 
     def init_storage(self, num_envs, num_transitions_per_env, actor_obs_shape, critic_obs_shape, action_shape):
         self.storage = HIMRolloutStorage(num_envs, num_transitions_per_env, actor_obs_shape, critic_obs_shape, action_shape, self.device)
@@ -218,6 +219,17 @@ class HIMPPO:
                 # Gradient step
                 self.optimizer.zero_grad()
                 loss.backward()
+                # --- DEBUG checkpoint 6: gradient norm explosion ---
+                if self.training_debug:
+                    _grad_norm = nn.utils.clip_grad_norm_(
+                        self.actor_critic.parameters(), float('inf'))
+                    if _grad_norm > 100.0 or torch.isnan(_grad_norm):
+                        print(f"[DEBUG:grad] grad_norm={_grad_norm:.1f} "
+                              f"val_loss={value_loss.item():.4f} "
+                              f"surr={surrogate_loss.item():.4f} "
+                              f"total_loss={loss.item():.4f} "
+                              f"max_grad_norm_cfg={self.max_grad_norm}")
+                        breakpoint()
                 nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
                 self.optimizer.step()
 

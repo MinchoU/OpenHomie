@@ -97,6 +97,12 @@ class HIMOnPolicyRunner:
         self.current_learning_iteration = 0
         self.git_status_repos = [rsl_rl.__file__]
 
+        # Training debug mode
+        self.training_debug = getattr(self.env.cfg, 'debug', False)
+        if self.training_debug:
+            self.alg.training_debug = True
+            print("[DEBUG] Training debug mode enabled — breakpoints active for NaN/explosion detection")
+
         _, _ = self.env.reset()
     
     def learn(self, num_learning_iterations, init_at_random_ep_len=False):
@@ -129,6 +135,11 @@ class HIMOnPolicyRunner:
         cur_reward_sum = torch.zeros(self.env.num_envs, dtype=torch.float, device=self.device)
         cur_episode_length = torch.zeros(self.env.num_envs, dtype=torch.float, device=self.device)
 
+        # --- DEBUG: per-step TD error tracking state ---
+        _dbg_prev_v = None
+        _dbg_prev_reward = None
+        _dbg_prev_dones = None
+
         start_iter = self.current_learning_iteration
         tot_iter = start_iter + num_learning_iterations
         for it in range(start_iter, tot_iter):
@@ -147,8 +158,31 @@ class HIMOnPolicyRunner:
                     next_critic_obs = critic_obs.clone().detach()
                     next_critic_obs[termination_ids] = termination_privileged_obs.clone().detach()
 
+                    # --- DEBUG checkpoint 4: per-step TD error ---
+                    if self.training_debug:
+                        v_now = self.alg.actor_critic.evaluate(critic_obs).squeeze(-1)
+                        if _dbg_prev_v is not None:
+                            _td_error = (_dbg_prev_reward
+                                         + self.alg.gamma * v_now * (~_dbg_prev_dones).float()
+                                         - _dbg_prev_v)
+                            _td_abs_max = _td_error.abs().max().item()
+                            _v_max = v_now.abs().max().item()
+                            if _td_abs_max > 50.0 or _v_max > 500.0 or torch.isnan(v_now).any():
+                                _worst = _td_error.abs().argmax().item()
+                                print(f"[DEBUG:td] iter={it} step={i} "
+                                      f"td_max={_td_abs_max:.1f} v_max={_v_max:.1f} "
+                                      f"worst_env={_worst} "
+                                      f"V(s)={_dbg_prev_v[_worst]:.1f} "
+                                      f"V(s')={v_now[_worst]:.1f} "
+                                      f"r={_dbg_prev_reward[_worst]:.2f} "
+                                      f"done={_dbg_prev_dones[_worst]:.0f}")
+                                breakpoint()
+                        _dbg_prev_v = v_now
+                        _dbg_prev_reward = rewards.clone()
+                        _dbg_prev_dones = dones.clone()
+
                     self.alg.process_env_step(rewards, dones, infos, next_critic_obs)
-                
+
                     if self.log_dir is not None:
                         # Book keeping
                         if 'episode' in infos:
@@ -167,8 +201,24 @@ class HIMOnPolicyRunner:
                 # Learning step
                 start = stop
                 self.alg.compute_returns(critic_obs)
-                
+
             mean_value_loss, mean_surrogate_loss, mean_estimation_loss, mean_swap_loss, mean_actor_sym_loss, mean_critic_sym_loss = self.alg.update()
+
+            # --- DEBUG checkpoint 5: post-update value loss spike / NaN ---
+            if self.training_debug:
+                import math
+                _any_nan = any(math.isnan(x) for x in [mean_value_loss, mean_surrogate_loss,
+                               mean_estimation_loss, mean_swap_loss])
+                if _any_nan or mean_value_loss > 5.0:
+                    self.save(os.path.join(self.log_dir, f'model_debug_{it}.pt'))
+                    print(f"[DEBUG:loss] iter={it} val_loss={mean_value_loss:.4f} "
+                          f"surr={mean_surrogate_loss:.4f} est={mean_estimation_loss:.4f} "
+                          f"swap={mean_swap_loss:.4f} actor_sym={mean_actor_sym_loss:.4f} "
+                          f"critic_sym={mean_critic_sym_loss:.4f} "
+                          f"nan={'YES' if _any_nan else 'no'} "
+                          f"(auto-saved model_debug_{it}.pt)")
+                    breakpoint()
+
             stop = time.time()
             learn_time = stop - start
             if self.log_dir is not None:
