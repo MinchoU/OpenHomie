@@ -17,8 +17,8 @@ def _segment_hits_pillars(
 ) -> torch.Tensor:
     """Check (per row) whether the segment base→end intersects any valid pillar.
 
-    ``pillar_meta`` and ``pillar_valid`` may carry any leading batch shape, but
-    their shape along the second-to-last axis must be the max pillar count P.
+    ``pillar_meta`` must be 3-D with shape ``[N, P, 4]`` or the broadcast-
+    compatible ``[1, P, 4]``; ``pillar_valid`` must be ``[N, P]`` or ``[1, P]``.
     Returns a bool tensor of shape ``base_xy.shape[:-1]``.
     """
     if base_xy.shape[0] == 0:
@@ -29,9 +29,6 @@ def _segment_hits_pillars(
     if pillar_meta.dim() == 3 and pillar_meta.shape[0] != base_xy.shape[0]:
         pillar_meta = pillar_meta.expand(base_xy.shape[0], *pillar_meta.shape[-2:])
         pillar_valid = pillar_valid.expand(base_xy.shape[0], pillar_valid.shape[-1])
-
-    N = base_xy.shape[0]
-    P = pillar_meta.shape[-2]
 
     # sample points along the segment (t = 0..1)
     ts = torch.linspace(0.0, 1.0, sample_steps, device=base_xy.device)  # [S]
@@ -127,8 +124,9 @@ class G1RoughCustom5(G1RoughCustom2):
         p_meta = self.pillar_meta[self.terrain_levels, self.terrain_types]
         p_valid = self.pillar_valid[self.terrain_levels, self.terrain_types]
 
-        # transform commanded velocity (base frame, xy) into world frame using yaw
-        yaw = self.yaw[:, 0]
+        # transform commanded velocity (base frame, xy) into world frame using yaw.
+        # euler_from_quaternion returns flat [N] each post_physics_step, so no index.
+        yaw = self.yaw
         c, s = torch.cos(yaw), torch.sin(yaw)
         cmd_b = self.commands[:, :2]
         cmd_w = torch.stack(

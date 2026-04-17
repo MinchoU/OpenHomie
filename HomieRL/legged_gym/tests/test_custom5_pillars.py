@@ -217,6 +217,14 @@ def test_segment_pillar_intersection_cases():
     end  = torch.tensor([[5.9, 5.0]])    # outside the rotated square along +x
     hit = _segment_hits_pillars(base, end, pillar_rot, pillar_valid, sample_steps=4)
     # A square of side=1 rotated by pi/4 has its outermost corner at x=5+0.707=5.707.
-    # A segment at x >= 5.8 is clearly outside the rotated square in local coords
-    # (lx = (5.8-5.0)*cos(-pi/4) ≈ 0.566 > 0.5 half-side).
+    # At (5.8, 5.0) the pillar-local coords are lx, ly ≈ ±0.566, both |·| > 0.5
+    # half-side, so the point is outside the rotated square.
+    assert hit.item() is False
+
+    # Case F: pillar_valid=False at the exact position where Case B would hit.
+    # The mask must suppress the hit so padding slots don't produce false positives.
+    pillar_valid_false = torch.tensor([[False]])
+    base = torch.tensor([[0.0, 0.0]])
+    end  = torch.tensor([[5.0, 5.0]])
+    hit = _segment_hits_pillars(base, end, pillar_meta, pillar_valid_false, sample_steps=4)
     assert hit.item() is False
