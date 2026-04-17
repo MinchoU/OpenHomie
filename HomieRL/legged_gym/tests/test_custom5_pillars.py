@@ -1,0 +1,123 @@
+"""Unit tests for custom5 pillar terrain generation helpers."""
+
+import numpy as np
+import pytest
+
+from legged_gym.utils.terrain import _rasterize_pillars
+
+
+# ---------- helpers ----------
+
+def _empty_heightfield(width_cells: int = 80, length_cells: int = 80) -> np.ndarray:
+    """Return a zeroed int16 heightfield of the given dimensions."""
+    return np.zeros((width_cells, length_cells), dtype=np.int16)
+
+
+# ---------- tests ----------
+
+def test_rasterize_zero_pillars_leaves_field_unchanged():
+    """When count_range=(0, 0) we must not touch any cell."""
+    hf = _empty_heightfield()
+    rng = np.random.default_rng(0)
+    pillars = _rasterize_pillars(
+        height_field_raw=hf,
+        horizontal_scale=0.1,
+        vertical_scale=0.005,
+        count_range=(0, 0),
+        height_range=(0.25, 1.25),
+        side_range=(0.4, 1.5),
+        top_noise=0.05,
+        platform_size=3.0,
+        rng=rng,
+    )
+    assert pillars == []
+    assert np.all(hf == 0)
+
+
+def test_rasterize_exactly_one_pillar_raises_some_cells():
+    """A forced 1-pillar run must leave pillar cells strictly taller than zero."""
+    hf = _empty_heightfield()
+    rng = np.random.default_rng(42)
+    pillars = _rasterize_pillars(
+        height_field_raw=hf,
+        horizontal_scale=0.1,
+        vertical_scale=0.005,
+        count_range=(1, 1),
+        height_range=(0.5, 0.5),
+        side_range=(1.0, 1.0),
+        top_noise=0.0,
+        platform_size=3.0,
+        rng=rng,
+    )
+    assert len(pillars) == 1
+    cx, cy, side, yaw = pillars[0]
+    assert side == pytest.approx(1.0)
+    # at least some cells must have been raised
+    raised = hf > 0
+    assert raised.any()
+    # target height 0.5 m / vertical_scale 0.005 = 100 units
+    max_cell = hf.max()
+    assert max_cell == 100
+
+
+def test_rasterize_respects_spawn_platform():
+    """No raised cell may lie inside the 3 m x 3 m spawn platform at center."""
+    hf = _empty_heightfield(width_cells=80, length_cells=80)  # 8 m x 8 m
+    rng = np.random.default_rng(7)
+    _rasterize_pillars(
+        height_field_raw=hf,
+        horizontal_scale=0.1,
+        vertical_scale=0.005,
+        count_range=(5, 5),     # force max pillars to stress the check
+        height_range=(0.25, 1.25),
+        side_range=(0.4, 1.5),
+        top_noise=0.0,
+        platform_size=3.0,
+        rng=rng,
+    )
+    W, L = hf.shape
+    # 80 x 0.1 m = 8 m terrain, center at (4, 4) m, half-platform = 1.5 m
+    # center cell range: [25, 54] inclusive (2.5-5.5 m)
+    platform_mask = np.zeros_like(hf, dtype=bool)
+    platform_mask[25:55, 25:55] = True
+    assert not (hf[platform_mask] > 0).any(), \
+        "pillar cells found inside the spawn platform"
+
+
+def test_rasterize_does_not_lower_existing_terrain():
+    """Running on a non-zero base must never DECREASE any cell."""
+    hf = np.full((80, 80), 10, dtype=np.int16)  # flat terrain at 10 units
+    rng = np.random.default_rng(3)
+    _rasterize_pillars(
+        height_field_raw=hf,
+        horizontal_scale=0.1,
+        vertical_scale=0.005,
+        count_range=(3, 3),
+        height_range=(0.25, 1.25),
+        side_range=(0.4, 1.0),
+        top_noise=0.05,
+        platform_size=3.0,
+        rng=rng,
+    )
+    assert (hf >= 10).all(), "pillar rasterization lowered an existing cell"
+
+
+def test_rasterize_uneven_top_produces_variation():
+    """Non-zero top_noise must introduce height variation across pillar cells."""
+    hf = _empty_heightfield()
+    rng = np.random.default_rng(11)
+    _rasterize_pillars(
+        height_field_raw=hf,
+        horizontal_scale=0.1,
+        vertical_scale=0.005,
+        count_range=(1, 1),
+        height_range=(1.0, 1.0),
+        side_range=(1.5, 1.5),
+        top_noise=0.05,
+        platform_size=3.0,
+        rng=rng,
+    )
+    # pillar cells have heights above 0; they should vary due to noise
+    pillar_heights = hf[hf > 0]
+    assert pillar_heights.size > 0
+    assert pillar_heights.max() - pillar_heights.min() > 1  # > 1 vertical_scale unit
