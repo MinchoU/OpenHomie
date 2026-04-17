@@ -3,7 +3,6 @@ pooled tracking criteria; rough_reward_gating disabled."""
 
 from __future__ import annotations
 
-import numpy as np
 import torch
 
 from legged_gym.envs.g1.g1_rough_custom2 import G1RoughCustom2
@@ -41,6 +40,16 @@ class G1RoughCustom5(G1RoughCustom2):
         # pillar metadata tensors: [num_rows, num_cols, MAX_PILLARS, 4]
         num_rows = self.cfg.terrain.num_rows
         num_cols = self.cfg.terrain.num_cols
+
+        # Guard against silent truncation: MAX_PILLARS must cover cfg.pillars.count_range[1].
+        pillar_cfg = getattr(self.cfg.terrain, "pillars", None)
+        if pillar_cfg is not None:
+            cfg_max = int(getattr(pillar_cfg, "count_range", (0, 0))[1])
+            assert cfg_max <= self.MAX_PILLARS, (
+                f"cfg.terrain.pillars.count_range[1]={cfg_max} exceeds "
+                f"G1RoughCustom5.MAX_PILLARS={self.MAX_PILLARS}; bump MAX_PILLARS or lower count_range."
+            )
+
         self.pillar_meta = torch.zeros(
             (num_rows, num_cols, self.MAX_PILLARS, 4),
             dtype=torch.float, device=self.device, requires_grad=False,
