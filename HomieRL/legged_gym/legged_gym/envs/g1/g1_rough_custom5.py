@@ -170,20 +170,36 @@ class G1RoughCustom5(G1RoughCustom2):
         total_t, eff_x, eff_y = self._pooled_effective_tracking(env_ids)
 
         # Inject eff_x into the parent's terrain-unlock check by rewriting the
-        # slice the parent averages: target_mean = eff_x  ⇒  sum = eff_x * max_ep
-        # (parent at g1_rough_custom2.py:38-48 reads
-        #  episode_sums["tracking_x_vel"][env_ids].mean() / max_episode_length
-        #  and compares to 0.8 * reward_scales["tracking_x_vel"].)
+        # slice the parent averages. Parent (g1_rough_custom2.py:38-48) reads
+        #   episode_sums["tracking_x_vel"][env_ids].mean() / max_episode_length
+        # and compares to 0.8 * reward_scales["tracking_x_vel"]. reward_scales
+        # is dt-scaled at _prepare_reward_function (legged_robot.py:1087), so to
+        # make the parent's check fire iff eff_x > 0.8 we inject
+        #   sum = eff_x * reward_scales["tracking_x_vel"] * max_episode_length
+        # ⇒ parent sees mean/max_ep = eff_x * reward_scales, compared to
+        #   0.8 * reward_scales ⇒ unlock iff eff_x > 0.8.
+        # Parent (custom2.reset_idx) calls update_action/command_curriculum FIRST
+        # (both overridden here → they read _pooled_effective_tracking directly,
+        # so the injected value is irrelevant to them), THEN reads
+        # episode_sums["tracking_x_vel"][env_ids].mean() for the terrain-unlock
+        # check — that's the consumer of the injected value.
         orig_episode_x = self.episode_sums["tracking_x_vel"][env_ids].clone()
         if total_t.item() >= 1.0:
-            self.episode_sums["tracking_x_vel"][env_ids] = eff_x * self.max_episode_length
+            self.episode_sums["tracking_x_vel"][env_ids] = (
+                eff_x * self.reward_scales["tracking_x_vel"] * self.max_episode_length
+            )
         else:
             self.episode_sums["tracking_x_vel"][env_ids] = 0.0
 
         try:
             super().reset_idx(env_ids)
         except Exception:
-            # restore the original slice so we don't corrupt state on crash
+            # Restore only the tracking_x_vel slice this override mutated. If
+            # super().reset_idx crashes mid-way, other env-state (dof_pos,
+            # last_actions, commands, episode_sums[...] for other keys, extras)
+            # may be in a half-reset state — isaac-gym generally cannot recover
+            # from mid-reset failures, but at least we don't leave the injected
+            # sentinel value visible to any downstream handler of the exception.
             self.episode_sums["tracking_x_vel"][env_ids] = orig_episode_x
             raise
 
@@ -210,6 +226,7 @@ class G1RoughCustom5(G1RoughCustom2):
 
         eff_x / eff_y are set to 0.0 if total_clear_time < 1 (nobody progressed).
         """
+        # Callers that already have total_t can read .item() once and avoid re-syncing.
         total_t = self._clear_time[env_ids].sum()
         if total_t.item() < 1.0:
             zero = torch.zeros((), device=self.device)
@@ -222,15 +239,17 @@ class G1RoughCustom5(G1RoughCustom2):
         total_t, eff_x, _ = self._pooled_effective_tracking(env_ids)
         if total_t.item() < 1.0:
             return
-        if eff_x > 0.8 * self.reward_scales["tracking_x_vel"]:
+        # eff_x is the pooled UNSCALED Gaussian on clear steps (range 0..1), so
+        # the threshold is "80% of peak tracking" — not 0.8 * reward_scales
+        # which would be dt-scaled.
+        if eff_x > 0.8:
             self.action_curriculum_ratio = min(self.action_curriculum_ratio + 0.05, 1.0)
 
     def update_command_curriculum(self, env_ids) -> None:
         total_t, eff_x, eff_y = self._pooled_effective_tracking(env_ids)
         if total_t.item() < 1.0:
             return
-        if (eff_x > 0.8 * self.reward_scales["tracking_x_vel"]
-                and eff_y > 0.8 * self.reward_scales["tracking_y_vel"]):
+        if eff_x > 0.8 and eff_y > 0.8:
             self.command_ranges["lin_vel_x"][0] = np.clip(
                 self.command_ranges["lin_vel_x"][0] - 0.2,
                 -self.cfg.commands.max_curriculum, 0.)
