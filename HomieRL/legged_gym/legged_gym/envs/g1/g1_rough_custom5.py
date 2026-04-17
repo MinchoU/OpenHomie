@@ -8,6 +8,53 @@ import torch
 from legged_gym.envs.g1.g1_rough_custom2 import G1RoughCustom2
 
 
+def _segment_hits_pillars(
+    base_xy: torch.Tensor,        # [N, 2] world
+    end_xy: torch.Tensor,         # [N, 2] world
+    pillar_meta: torch.Tensor,    # [..., P, 4] — last axis = (cx, cy, side, yaw)
+    pillar_valid: torch.Tensor,   # [..., P] — bool
+    sample_steps: int = 4,
+) -> torch.Tensor:
+    """Check (per row) whether the segment base→end intersects any valid pillar.
+
+    ``pillar_meta`` and ``pillar_valid`` may carry any leading batch shape, but
+    their shape along the second-to-last axis must be the max pillar count P.
+    Returns a bool tensor of shape ``base_xy.shape[:-1]``.
+    """
+    if base_xy.shape[0] == 0:
+        return torch.zeros(base_xy.shape[:-1], dtype=torch.bool, device=base_xy.device)
+
+    # broadcast check: handles both the unit-test shape [1, 1, 4] and the
+    # live shape [N, MAX_PILLARS, 4] (env class indexes into the padded grid).
+    if pillar_meta.dim() == 3 and pillar_meta.shape[0] != base_xy.shape[0]:
+        pillar_meta = pillar_meta.expand(base_xy.shape[0], *pillar_meta.shape[-2:])
+        pillar_valid = pillar_valid.expand(base_xy.shape[0], pillar_valid.shape[-1])
+
+    N = base_xy.shape[0]
+    P = pillar_meta.shape[-2]
+
+    # sample points along the segment (t = 0..1)
+    ts = torch.linspace(0.0, 1.0, sample_steps, device=base_xy.device)  # [S]
+    delta = end_xy - base_xy                                             # [N, 2]
+    sample = base_xy[:, None, :] + ts[None, :, None] * delta[:, None, :] # [N, S, 2]
+
+    cx = pillar_meta[..., 0]          # [N, P]
+    cy = pillar_meta[..., 1]
+    side = pillar_meta[..., 2]
+    yaw = pillar_meta[..., 3]
+
+    # pillar-local coords: rotate samples into each pillar's frame
+    dx = sample[:, :, None, 0] - cx[:, None, :]   # [N, S, P]
+    dy = sample[:, :, None, 1] - cy[:, None, :]
+    cos_y = torch.cos(-yaw)[:, None, :]            # [N, 1, P]
+    sin_y = torch.sin(-yaw)[:, None, :]
+    lx = dx * cos_y - dy * sin_y
+    ly = dx * sin_y + dy * cos_y
+    half = (side / 2.0)[:, None, :]
+    inside = (lx.abs() <= half) & (ly.abs() <= half) & pillar_valid[:, None, :]  # [N, S, P]
+    return inside.any(dim=(1, 2))
+
+
 class G1RoughCustom5(G1RoughCustom2):
     """Custom5: custom4-style config + random pillars in the heightfield.
 
@@ -72,3 +119,28 @@ class G1RoughCustom5(G1RoughCustom2):
                     self.pillar_meta[r, c, k, 2] = side
                     self.pillar_meta[r, c, k, 3] = yaw
                     self.pillar_valid[r, c, k] = True
+
+    def _path_clear_per_step(self) -> torch.Tensor:
+        """True per-env when the 0.5 s forward-projection of the commanded
+        velocity does not enter any pillar on the env's current subterrain."""
+        # per-env padded pillar slice: [N, MAX_PILLARS, 4]
+        p_meta = self.pillar_meta[self.terrain_levels, self.terrain_types]
+        p_valid = self.pillar_valid[self.terrain_levels, self.terrain_types]
+
+        # transform commanded velocity (base frame, xy) into world frame using yaw
+        yaw = self.yaw[:, 0]
+        c, s = torch.cos(yaw), torch.sin(yaw)
+        cmd_b = self.commands[:, :2]
+        cmd_w = torch.stack(
+            [cmd_b[:, 0] * c - cmd_b[:, 1] * s,
+             cmd_b[:, 0] * s + cmd_b[:, 1] * c],
+            dim=1,
+        )
+
+        base_xy = self.root_states[:, :2]
+        end_xy = base_xy + cmd_w * self.AHEAD_TIME
+
+        blocked = _segment_hits_pillars(
+            base_xy, end_xy, p_meta, p_valid, sample_steps=self.SAMPLE_STEPS
+        )
+        return ~blocked

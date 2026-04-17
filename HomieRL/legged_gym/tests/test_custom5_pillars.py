@@ -172,3 +172,51 @@ def test_terrain_pipeline_records_world_pillars_per_subterrain():
                 assert col * _TerrainCfg.terrain_width <= cy <= (col + 1) * _TerrainCfg.terrain_width
                 assert side == pytest.approx(1.0)
                 assert 0.0 <= yaw < np.pi / 2.0
+
+
+# ---------- path-clear geometry test ----------
+
+def test_segment_pillar_intersection_cases():
+    """Validate _segment_hits_pillars on a handful of hand-designed scenes.
+
+    One pillar at world (5, 5), side=1.0 (half=0.5), yaw=0 → AABB [4.5,5.5]² in world.
+    """
+    import torch
+    from legged_gym.envs.g1.g1_rough_custom5 import _segment_hits_pillars
+
+    pillar_meta = torch.tensor([[[5.0, 5.0, 1.0, 0.0]]])       # [1, 1, 4]
+    pillar_valid = torch.tensor([[True]])                        # [1, 1]
+
+    # Case A: segment fully outside the pillar AABB, far away. Expected: False.
+    base = torch.tensor([[0.0, 0.0]])
+    end  = torch.tensor([[1.0, 0.0]])
+    hit = _segment_hits_pillars(base, end, pillar_meta, pillar_valid, sample_steps=4)
+    assert hit.item() is False
+
+    # Case B: segment endpoint inside the pillar. Expected: True.
+    base = torch.tensor([[0.0, 0.0]])
+    end  = torch.tensor([[5.0, 5.0]])
+    hit = _segment_hits_pillars(base, end, pillar_meta, pillar_valid, sample_steps=4)
+    assert hit.item() is True
+
+    # Case C: command direction points away; segment in opposite direction. Expected: False.
+    base = torch.tensor([[10.0, 10.0]])
+    end  = torch.tensor([[11.0, 11.0]])
+    hit = _segment_hits_pillars(base, end, pillar_meta, pillar_valid, sample_steps=4)
+    assert hit.item() is False
+
+    # Case D: zero-length segment (robot at rest) at a safe position. Expected: False.
+    base = torch.tensor([[0.0, 0.0]])
+    end  = torch.tensor([[0.0, 0.0]])
+    hit = _segment_hits_pillars(base, end, pillar_meta, pillar_valid, sample_steps=4)
+    assert hit.item() is False
+
+    # Case E: yaw-rotated pillar, segment clearly outside the rotated square.
+    pillar_rot = torch.tensor([[[5.0, 5.0, 1.0, np.pi / 4]]])
+    base = torch.tensor([[5.8, 5.0]])
+    end  = torch.tensor([[5.9, 5.0]])    # outside the rotated square along +x
+    hit = _segment_hits_pillars(base, end, pillar_rot, pillar_valid, sample_steps=4)
+    # A square of side=1 rotated by pi/4 has its outermost corner at x=5+0.707=5.707.
+    # A segment at x >= 5.8 is clearly outside the rotated square in local coords
+    # (lx = (5.8-5.0)*cos(-pi/4) ≈ 0.566 > 0.5 half-side).
+    assert hit.item() is False
