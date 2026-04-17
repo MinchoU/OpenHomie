@@ -121,6 +121,12 @@ class Terrain:
         self.tot_rows = int(cfg.num_rows * self.length_per_env_pixels) + 2 * self.border
         self.height_field_raw = np.zeros((self.tot_rows, self.tot_cols), dtype=np.int16)
 
+        # Per-subterrain pillar metadata (custom5). Each entry is a list of
+        # (cx_world, cy_world, side, yaw) -- world meters, radians.
+        self.pillars = [
+            [[] for _ in range(cfg.num_cols)] for _ in range(cfg.num_rows)
+        ]
+
         if cfg.curriculum:
             self.curriculum()
         elif cfg.selected:
@@ -210,7 +216,28 @@ class Terrain:
                 20,
                 platform_size=3.0,
             )
+        terrain.pillars = self._add_pillars(terrain)
         return terrain
+
+    def _add_pillars(self, terrain) -> list:
+        """Rasterize random pillars into a SubTerrain's heightfield.
+
+        Returns the list of (cx_local, cy_local, side, yaw) that were placed,
+        in the subterrain's local meter frame.
+        """
+        pillar_cfg = getattr(self.cfg, "pillars", None)
+        if pillar_cfg is None or not getattr(pillar_cfg, "enabled", False):
+            return []
+        return _rasterize_pillars(
+            height_field_raw=terrain.height_field_raw,
+            horizontal_scale=terrain.horizontal_scale,
+            vertical_scale=terrain.vertical_scale,
+            count_range=tuple(pillar_cfg.count_range),
+            height_range=tuple(pillar_cfg.height_range),
+            side_range=tuple(pillar_cfg.side_range),
+            top_noise=pillar_cfg.top_noise,
+            platform_size=pillar_cfg.platform_size,
+        )
 
     def add_terrain_to_map(self, terrain, row, col):
         start_x = self.border + row * self.length_per_env_pixels
@@ -227,3 +254,17 @@ class Terrain:
         y2 = int((self.env_width / 2.0 + 1) / terrain.horizontal_scale)
         env_origin_z = np.max(terrain.height_field_raw[x1:x2, y1:y2]) * terrain.vertical_scale
         self.env_origins[row, col] = [env_origin_x, env_origin_y, env_origin_z]
+
+        # custom5: translate pillars from subterrain-local meters to world meters
+        local_pillars = getattr(terrain, "pillars", [])
+        world_pillars = []
+        subterrain_origin_x = row * self.env_length
+        subterrain_origin_y = col * self.env_width
+        for (cx_l, cy_l, side, yaw) in local_pillars:
+            world_pillars.append((
+                cx_l + subterrain_origin_x,
+                cy_l + subterrain_origin_y,
+                side,
+                yaw,
+            ))
+        self.pillars[row][col] = world_pillars

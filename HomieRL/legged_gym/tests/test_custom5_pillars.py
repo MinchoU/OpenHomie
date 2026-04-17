@@ -121,3 +121,58 @@ def test_rasterize_uneven_top_produces_variation():
     pillar_heights = hf[hf > 0]
     assert pillar_heights.size > 0
     assert pillar_heights.max() - pillar_heights.min() > 1  # > 1 vertical_scale unit
+
+
+# ---------- end-to-end terrain pipeline test ----------
+
+class _PillarCfg:
+    enabled = True
+    count_range = (2, 2)
+    height_range = (0.5, 0.5)
+    side_range = (1.0, 1.0)
+    top_noise = 0.0
+    platform_size = 3.0
+
+
+class _TerrainCfg:
+    """Minimal stand-in for LeggedRobotCfg.terrain used in the pipeline test."""
+    mesh_type = "trimesh"
+    horizontal_scale = 0.1
+    vertical_scale = 0.005
+    border_size = 0.0  # simplifies index math in the test
+    curriculum = True
+    static_friction = 1.0
+    dynamic_friction = 1.0
+    restitution = 0.0
+    measure_heights = True
+    measured_points_x = [0.0]
+    measured_points_y = [0.0]
+    selected = False
+    terrain_kwargs = None
+    max_init_terrain_level = 0
+    terrain_length = 8.0
+    terrain_width = 8.0
+    num_rows = 2
+    num_cols = 2
+    # custom5 terrain_proportions -- forces exactly one terrain type (pyramid slope)
+    terrain_proportions = [1.0, 0.0, 0.0, 0.0, 0.0]
+    slope_treshold = 0.75
+    pillars = _PillarCfg()
+
+
+def test_terrain_pipeline_records_world_pillars_per_subterrain():
+    """Running the curriculum path must populate Terrain.pillars
+    with exactly count_range[0] entries per subterrain, in world coords."""
+    from legged_gym.utils.terrain import Terrain
+
+    terrain = Terrain(_TerrainCfg(), num_robots=1)
+    for row in range(_TerrainCfg.num_rows):
+        for col in range(_TerrainCfg.num_cols):
+            entries = terrain.pillars[row][col]
+            assert len(entries) == 2, f"subterrain ({row},{col}) has {len(entries)} pillars"
+            for (cx, cy, side, yaw) in entries:
+                # world x must fall within [row*env_length, (row+1)*env_length]
+                assert row * _TerrainCfg.terrain_length <= cx <= (row + 1) * _TerrainCfg.terrain_length
+                assert col * _TerrainCfg.terrain_width <= cy <= (col + 1) * _TerrainCfg.terrain_width
+                assert side == pytest.approx(1.0)
+                assert 0.0 <= yaw <= np.pi / 2.0
