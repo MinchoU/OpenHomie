@@ -3,7 +3,7 @@
 Usage (run inside the training env that has isaacgym importable):
 
     python legged_gym/legged_gym/scripts/export_terrain_samples.py \
-        --out /tmp/custom5_terrain \
+        --out legged_gym/logs/custom5_terrain_samples \
         --seed 0
 
 Generates:
@@ -123,7 +123,11 @@ def _render_single_subterrain(choice: float, difficulty: float, seed: int):
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--out", type=Path, default=Path("/tmp/custom5_terrain"))
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=Path("legged_gym/logs/custom5_terrain_samples"),
+    )
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 
