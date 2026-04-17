@@ -145,8 +145,11 @@ class G1RoughCustom5(G1RoughCustom2):
 
     def compute_reward(self) -> None:
         super().compute_reward()
-        # accumulate per-step "path clear" + tracking reward so curriculum
+        # Accumulate per-step "path clear" + tracking reward so curriculum
         # criteria can pool over steps where the env wasn't blocked.
+        # _clear_tracking_{x,y} hold the UNSCALED Gaussian (range 0..1 per
+        # step); downstream curriculum code must not compare them directly
+        # against episode_sums[...] which are multiplied by reward_scales.
         clear = self._path_clear_per_step().float()
         self._clear_time += clear
         sigma = self.cfg.rewards.tracking_sigma
@@ -159,10 +162,10 @@ class G1RoughCustom5(G1RoughCustom2):
 
     def reset_idx(self, env_ids) -> None:
         if len(env_ids) == 0:
-            super().reset_idx(env_ids)
             return
-        # reset accumulators BEFORE super() so the terrain-unlock check (which we
-        # override separately) can see fresh zeros if it needs them later.
+        # Zero the path-clear accumulators for resetting envs before delegating.
+        # Task 7 will replace this method with a version that inspects the
+        # pooled metric here before zeroing, so the order matters there.
         self._clear_time[env_ids] = 0.0
         self._clear_tracking_x[env_ids] = 0.0
         self._clear_tracking_y[env_ids] = 0.0
