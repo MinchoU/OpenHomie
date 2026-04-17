@@ -14,10 +14,10 @@ any `legged_gym.utils.<sub>` module is imported directly. Pre-importing
 
 try:
     import isaacgym  # noqa: F401
-except ImportError:
+except ModuleNotFoundError:
     pass
 
 try:
     import legged_gym.envs  # noqa: F401
-except ImportError:
+except ModuleNotFoundError:
     pass
