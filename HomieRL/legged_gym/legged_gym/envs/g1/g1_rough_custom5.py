@@ -3,6 +3,7 @@ pooled tracking criteria; rough_reward_gating disabled."""
 
 from __future__ import annotations
 
+import numpy as np
 import torch
 
 from legged_gym.envs.g1.g1_rough_custom2 import G1RoughCustom2
@@ -163,10 +164,76 @@ class G1RoughCustom5(G1RoughCustom2):
     def reset_idx(self, env_ids) -> None:
         if len(env_ids) == 0:
             return
-        # Zero the path-clear accumulators for resetting envs before delegating.
-        # Task 7 will replace this method with a version that inspects the
-        # pooled metric here before zeroing, so the order matters there.
+
+        # Cache pooled metrics BEFORE any reset so telemetry sees the episode
+        # we're actually ending (not the post-zero state).
+        total_t, eff_x, eff_y = self._pooled_effective_tracking(env_ids)
+
+        # Inject eff_x into the parent's terrain-unlock check by rewriting the
+        # slice the parent averages: target_mean = eff_x  ⇒  sum = eff_x * max_ep
+        # (parent at g1_rough_custom2.py:38-48 reads
+        #  episode_sums["tracking_x_vel"][env_ids].mean() / max_episode_length
+        #  and compares to 0.8 * reward_scales["tracking_x_vel"].)
+        orig_episode_x = self.episode_sums["tracking_x_vel"][env_ids].clone()
+        if total_t.item() >= 1.0:
+            self.episode_sums["tracking_x_vel"][env_ids] = eff_x * self.max_episode_length
+        else:
+            self.episode_sums["tracking_x_vel"][env_ids] = 0.0
+
+        try:
+            super().reset_idx(env_ids)
+        except Exception:
+            # restore the original slice so we don't corrupt state on crash
+            self.episode_sums["tracking_x_vel"][env_ids] = orig_episode_x
+            raise
+
+        # parent already zeroed episode_sums for env_ids as part of its cleanup,
+        # so no restoration needed. Now zero our private accumulators.
         self._clear_time[env_ids] = 0.0
         self._clear_tracking_x[env_ids] = 0.0
         self._clear_tracking_y[env_ids] = 0.0
-        super().reset_idx(env_ids)
+
+        # pooled telemetry — append to extras["episode"] populated by the parent
+        if "episode" in self.extras:
+            max_ep = float(self.max_episode_length)
+            n = float(len(env_ids))
+            self.extras["episode"]["pool_clear_ratio"] = (
+                total_t.item() / max(1.0, n * max_ep)
+            )
+            self.extras["episode"]["pool_tracking_x_effective"] = float(eff_x.item())
+            self.extras["episode"]["pool_tracking_y_effective"] = float(eff_y.item())
+
+    # ---------- pooled curriculum criteria ----------
+
+    def _pooled_effective_tracking(self, env_ids) -> tuple:
+        """Return (total_clear_time, eff_x, eff_y) pooled across env_ids.
+
+        eff_x / eff_y are set to 0.0 if total_clear_time < 1 (nobody progressed).
+        """
+        total_t = self._clear_time[env_ids].sum()
+        if total_t.item() < 1.0:
+            zero = torch.zeros((), device=self.device)
+            return total_t, zero, zero
+        eff_x = self._clear_tracking_x[env_ids].sum() / total_t
+        eff_y = self._clear_tracking_y[env_ids].sum() / total_t
+        return total_t, eff_x, eff_y
+
+    def update_action_curriculum(self, env_ids) -> None:
+        total_t, eff_x, _ = self._pooled_effective_tracking(env_ids)
+        if total_t.item() < 1.0:
+            return
+        if eff_x > 0.8 * self.reward_scales["tracking_x_vel"]:
+            self.action_curriculum_ratio = min(self.action_curriculum_ratio + 0.05, 1.0)
+
+    def update_command_curriculum(self, env_ids) -> None:
+        total_t, eff_x, eff_y = self._pooled_effective_tracking(env_ids)
+        if total_t.item() < 1.0:
+            return
+        if (eff_x > 0.8 * self.reward_scales["tracking_x_vel"]
+                and eff_y > 0.8 * self.reward_scales["tracking_y_vel"]):
+            self.command_ranges["lin_vel_x"][0] = np.clip(
+                self.command_ranges["lin_vel_x"][0] - 0.2,
+                -self.cfg.commands.max_curriculum, 0.)
+            self.command_ranges["lin_vel_x"][1] = np.clip(
+                self.command_ranges["lin_vel_x"][1] + 0.2,
+                0., self.cfg.commands.max_curriculum)
