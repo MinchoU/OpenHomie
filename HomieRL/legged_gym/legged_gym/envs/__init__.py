@@ -31,6 +31,7 @@
 from legged_gym import LEGGED_GYM_ROOT_DIR, LEGGED_GYM_ENVS_DIR
 from .base.legged_robot import LeggedRobot
 from .g1.g1_rough_custom2 import G1RoughCustom2
+from .g1.g1_rough_custom5 import G1RoughCustom5
 
 from legged_gym.envs.g1.g1_29dof_config import (
     G1RoughCfg,
@@ -51,6 +52,8 @@ from legged_gym.envs.g1.g1_43dof_config import (
     G143dofNoHandObsRoughCustomTerrainCfgPPO,
     G143dofNoHandObsRoughCustom4TerrainCfg,
     G143dofNoHandObsRoughCustom4TerrainCfgPPO,
+    G143dofNoHandObsRoughCustom5TerrainCfg,
+    G143dofNoHandObsRoughCustom5TerrainCfgPPO,
     G143dofNoHandObsRoughTerrainCfg,
     G143dofNoHandObsRoughTerrainCfgPPO,
     G143dofRoughCfg,
@@ -76,3 +79,4 @@ task_registry.register( "g1_43dof_nohandobs", LeggedRobot, G143dofNoHandObsRough
 task_registry.register( "g1_43dof_nohandobs_rough", LeggedRobot, G143dofNoHandObsRoughTerrainCfg(), G143dofNoHandObsRoughTerrainCfgPPO() )
 task_registry.register( "g1_43dof_nohandobs_rough_custom", LeggedRobot, G143dofNoHandObsRoughCustomTerrainCfg(), G143dofNoHandObsRoughCustomTerrainCfgPPO() )
 task_registry.register( "g1_43dof_nohandobs_rough_custom4", G1RoughCustom2, G143dofNoHandObsRoughCustom4TerrainCfg(), G143dofNoHandObsRoughCustom4TerrainCfgPPO() )
+task_registry.register( "g1_43dof_nohandobs_rough_custom5", G1RoughCustom5, G143dofNoHandObsRoughCustom5TerrainCfg(), G143dofNoHandObsRoughCustom5TerrainCfgPPO() )
