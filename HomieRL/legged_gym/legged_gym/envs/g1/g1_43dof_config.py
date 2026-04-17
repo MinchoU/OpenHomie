@@ -447,3 +447,62 @@ class G143dofNoHandObsRoughCustom4TerrainCfg( G143dofNoHandObsRoughTerrainCfg ):
 class G143dofNoHandObsRoughCustom4TerrainCfgPPO( G143dofNoHandObsRoughCfgPPO ):
     class runner( G143dofNoHandObsRoughCfgPPO.runner ):
         experiment_name = 'g1_43dof_nohandobs_rough_custom4'
+
+
+# ----- custom5: custom4-style terrain curriculum + random pillars + no rough_reward_gating -----
+
+class G143dofNoHandObsRoughCustom5TerrainCfg( G143dofNoHandObsRoughTerrainCfg ):
+    """custom4-style env with random pillars rasterized into the heightfield.
+
+    - 43-DOF no-hand-obs robot (same as custom4)
+    - Terrain curriculum gated on action curriculum completion (via G1RoughCustom2)
+    - Foothold reward retained; rough_reward_gating is DISABLED
+    - 0-5 random yaw-rotated square pillars per subterrain, h in [0.25, 1.25] m,
+      side in [0.4, 1.5] m, with uneven (+/-0.05 m) tops
+    """
+
+    class env( G143dofNoHandObsRoughTerrainCfg.env ):
+        num_height_points = G143dofNoHandObsRoughTerrainCfg.env.num_height_points
+        num_one_step_observations = G143dofNoHandObsRoughTerrainCfg.env.num_one_step_observations
+        # NOTE: no +1 here (unlike custom4) - rough_reward_gating is off, so its
+        # extra feature is never appended to the privileged obs.
+        num_one_step_privileged_obs = G143dofNoHandObsRoughTerrainCfg.env.num_one_step_privileged_obs
+        num_observations = G143dofNoHandObsRoughTerrainCfg.env.num_observations
+        num_privileged_obs = (
+            G143dofNoHandObsRoughTerrainCfg.env.num_critic_history
+            * num_one_step_privileged_obs
+            + num_height_points
+        )
+
+    class terrain( G143dofNoHandObsRoughTerrainCfg.terrain ):
+        mesh_type = 'trimesh'
+        curriculum = True
+        max_init_terrain_level = 0  # all agents start at level 0 (same as custom2/3/4)
+        num_rows = 10
+        num_cols = 20
+        terrain_proportions = [0.1, 0.2, 0.3, 0.3, 0.1]
+
+        class pillars:
+            enabled = True
+            count_range = (0, 5)
+            height_range = (0.25, 1.25)
+            side_range = (0.4, 1.5)
+            top_noise = 0.05
+            platform_size = 3.0
+
+    class rewards( G143dofRoughCfg.rewards ):
+        class scales( G143dofRoughCfg.rewards.scales ):
+            foothold = -0.2
+
+        foothold_grid_x = [-0.06, 0.12, 5]
+        foothold_grid_y = [-0.04, 0.04, 3]
+        foothold_grid_z = -0.04
+        foothold_height_tolerance = 0.025
+        foothold_min_coverage = 0.9
+        foothold_contact_force = 5.0
+        rough_reward_gating_enabled = False  # DISABLED in custom5
+
+
+class G143dofNoHandObsRoughCustom5TerrainCfgPPO( G143dofNoHandObsRoughCfgPPO ):
+    class runner( G143dofNoHandObsRoughCfgPPO.runner ):
+        experiment_name = 'g1_43dof_nohandobs_rough_custom5'
