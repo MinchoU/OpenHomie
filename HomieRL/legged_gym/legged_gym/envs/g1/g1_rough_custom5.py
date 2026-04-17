@@ -142,3 +142,28 @@ class G1RoughCustom5(G1RoughCustom2):
             base_xy, end_xy, p_meta, p_valid, sample_steps=self.SAMPLE_STEPS
         )
         return ~blocked
+
+    def compute_reward(self) -> None:
+        super().compute_reward()
+        # accumulate per-step "path clear" + tracking reward so curriculum
+        # criteria can pool over steps where the env wasn't blocked.
+        clear = self._path_clear_per_step().float()
+        self._clear_time += clear
+        sigma = self.cfg.rewards.tracking_sigma
+        err_x = (self.commands[:, 0] - self.base_lin_vel[:, 0]).square()
+        err_y = (self.commands[:, 1] - self.base_lin_vel[:, 1]).square()
+        rew_x = torch.exp(-err_x / sigma)
+        rew_y = torch.exp(-err_y / sigma)
+        self._clear_tracking_x += rew_x * clear
+        self._clear_tracking_y += rew_y * clear
+
+    def reset_idx(self, env_ids) -> None:
+        if len(env_ids) == 0:
+            super().reset_idx(env_ids)
+            return
+        # reset accumulators BEFORE super() so the terrain-unlock check (which we
+        # override separately) can see fresh zeros if it needs them later.
+        self._clear_time[env_ids] = 0.0
+        self._clear_tracking_x[env_ids] = 0.0
+        self._clear_tracking_y[env_ids] = 0.0
+        super().reset_idx(env_ids)
