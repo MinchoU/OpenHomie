@@ -126,8 +126,9 @@ class G1RoughCustom5(G1RoughCustom2):
         p_valid = self.pillar_valid[self.terrain_levels, self.terrain_types]
 
         # transform commanded velocity (base frame, xy) into world frame using yaw.
-        # euler_from_quaternion returns flat [N] each post_physics_step, so no index.
-        yaw = self.yaw
+        # The local euler_from_quaternion in legged_robot.py returns [N, 1]
+        # (unsqueezed) — flatten to [N] so broadcasting with commands[:, i] works.
+        yaw = self.yaw.view(-1)
         c, s = torch.cos(yaw), torch.sin(yaw)
         cmd_b = self.commands[:, :2]
         cmd_w = torch.stack(
