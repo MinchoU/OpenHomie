@@ -121,6 +121,9 @@ class G1RoughCustom5(G1RoughCustom2):
     def _path_clear_per_step(self) -> torch.Tensor:
         """True per-env when the 0.5 s forward-projection of the commanded
         velocity does not enter any pillar on the env's current subterrain."""
+        # Plane terrain has no pillars and no terrain_levels/types buffers.
+        if not hasattr(self, "terrain_levels"):
+            return torch.ones(self.num_envs, dtype=torch.bool, device=self.device)
         # per-env padded pillar slice: [N, MAX_PILLARS, 4]
         p_meta = self.pillar_meta[self.terrain_levels, self.terrain_types]
         p_valid = self.pillar_valid[self.terrain_levels, self.terrain_types]

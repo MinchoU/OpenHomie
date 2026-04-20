@@ -136,7 +136,8 @@ class TaskRegistry():
         _, train_cfg = update_cfg_from_args(None, train_cfg, args)
 
         if log_root=="default":
-            log_root = os.path.join(LEGGED_GYM_ROOT_DIR, 'logs', train_cfg.runner.experiment_name)
+            base_dir = getattr(args, "log_dir", None) or LEGGED_GYM_ROOT_DIR
+            log_root = os.path.join(base_dir, 'logs', train_cfg.runner.experiment_name)
             log_dir = os.path.join(log_root, datetime.now().strftime('%b%d_%H-%M-%S') + '_' + train_cfg.runner.run_name)
         elif log_root is None:
             log_dir = None

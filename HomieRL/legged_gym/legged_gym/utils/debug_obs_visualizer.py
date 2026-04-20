@@ -43,17 +43,17 @@ if not hasattr(Path, "is_relative_to"):
             return False
     Path.is_relative_to = _is_relative_to
 
-# -- G1 rough custom3 critic observation layout (critic_history=1) --
-# [0:3]    cmd_scaled          (commands[:,:3] * commands_scale)
-# [3:4]    height_cmd          (commands[:,4])
-# [4:7]    imu_ang_vel         (* obs_scales.ang_vel=0.5)
-# [7:10]   imu_proj_gravity    (unscaled, unit vector)
-# [10:37]  dof_pos_rel         (* obs_scales.dof_pos=1.0)
-# [37:64]  dof_vel             (* obs_scales.dof_vel=0.05)
-# [64:76]  actions             (raw, 12 lower-body actions)
-# [76:79]  base_lin_vel        (* obs_scales.lin_vel=2.0)
-# [79:80]  rough_gate          (0 or 1)
-# [80:267] scandots            (clip(robot_z-0.5-terrain_z, -1, 1) * 5.0)
+# -- Critic obs layouts, auto-selected by total dim --
+#
+# Variant A: 267 dims (g1_29dof, 27 observed DOFs, URDF g1.urdf)
+#   [0:3] cmd, [3:4] height_cmd, [4:7] ang_vel*0.5, [7:10] proj_grav,
+#   [10:37] dof_pos_rel*1, [37:64] dof_vel*0.05, [64:76] actions,
+#   [76:79] base_lin_vel*2, [79:80] rough_gate, [80:267] scandots*5.0
+#
+# Variant B: 271 dims (g1_43dof NoHandObs, 29 observed DOFs, URDF g1_43dof.urdf)
+#   [0:3] cmd, [3:4] height_cmd, [4:7] ang_vel*0.5, [7:10] proj_grav,
+#   [10:39] dof_pos_rel*1, [39:68] dof_vel*0.05, [68:80] actions,
+#   [80:83] base_lin_vel*2, [83:84] rough_gate, [84:271] scandots*5.0
 
 SCANDOT_X = np.array([-0.8, -0.7, -0.6, -0.5, -0.4, -0.3, -0.2, -0.1,
                        0., 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8])
@@ -68,8 +68,8 @@ SCALE_HEIGHT = 5.0
 
 ROBOT_Z = 0.75  # nominal init height
 
-# Isaac Gym DOF order for g1.urdf (27 revolute joints, URDF order)
-SIM_JOINT_NAMES = [
+# g1.urdf: 27 revolute joints (URDF order)
+SIM_JOINT_NAMES_27 = [
     'left_hip_pitch_joint', 'left_hip_roll_joint', 'left_hip_yaw_joint',
     'left_knee_joint', 'left_ankle_pitch_joint', 'left_ankle_roll_joint',
     'right_hip_pitch_joint', 'right_hip_roll_joint', 'right_hip_yaw_joint',
@@ -81,15 +81,37 @@ SIM_JOINT_NAMES = [
     'right_elbow_joint', 'right_wrist_roll_joint', 'right_wrist_pitch_joint', 'right_wrist_yaw_joint',
 ]
 
-DEFAULT_DOF_POS = np.array([
+DEFAULT_DOF_POS_27 = np.array([
     -0.1, 0., 0., 0.3, -0.2, 0.,    # left leg
     -0.1, 0., 0., 0.3, -0.2, 0.,    # right leg
-    0.,                               # waist
+    0.,                               # waist yaw
     0., 0., 0., 0., 0., 0., 0.,      # left arm
     0., 0., 0., 0., 0., 0., 0.,      # right arm
 ])
 
-URDF_PATH = '/home/cmw9903/gauss_gym/holosoma/third_party/OpenHomie/HomieRL/legged_gym/resources/robots/g1_description/g1.urdf'
+# g1_43dof.urdf with hands excluded: 29 observed revolute joints (URDF order)
+SIM_JOINT_NAMES_29 = [
+    'left_hip_pitch_joint', 'left_hip_roll_joint', 'left_hip_yaw_joint',
+    'left_knee_joint', 'left_ankle_pitch_joint', 'left_ankle_roll_joint',
+    'right_hip_pitch_joint', 'right_hip_roll_joint', 'right_hip_yaw_joint',
+    'right_knee_joint', 'right_ankle_pitch_joint', 'right_ankle_roll_joint',
+    'waist_yaw_joint', 'waist_roll_joint', 'waist_pitch_joint',
+    'left_shoulder_pitch_joint', 'left_shoulder_roll_joint', 'left_shoulder_yaw_joint',
+    'left_elbow_joint', 'left_wrist_roll_joint', 'left_wrist_pitch_joint', 'left_wrist_yaw_joint',
+    'right_shoulder_pitch_joint', 'right_shoulder_roll_joint', 'right_shoulder_yaw_joint',
+    'right_elbow_joint', 'right_wrist_roll_joint', 'right_wrist_pitch_joint', 'right_wrist_yaw_joint',
+]
+
+DEFAULT_DOF_POS_29 = np.array([
+    -0.1, 0., 0., 0.3, -0.2, 0.,    # left leg
+    -0.1, 0., 0., 0.3, -0.2, 0.,    # right leg
+    0., 0., 0.,                      # waist yaw/roll/pitch
+    0., 0., 0., 0., 0., 0., 0.,      # left arm
+    0., 0., 0., 0., 0., 0., 0.,      # right arm
+])
+
+URDF_PATH_27 = '/home/cmw9903/gauss_gym/holosoma/third_party/OpenHomie/HomieRL/legged_gym/resources/robots/g1_description/g1.urdf'
+URDF_PATH_43 = '/home/cmw9903/gauss_gym/holosoma/third_party/OpenHomie/HomieRL/legged_gym/resources/robots/g1_description/g1_43dof.urdf'
 
 
 def _to_numpy(x):
@@ -99,26 +121,53 @@ def _to_numpy(x):
 
 
 def decode_critic_obs(obs):
-    """Decode a 267-dim critic observation into semantic components."""
-    o = _to_numpy(obs).ravel()
-    assert o.shape[0] == 267, "Expected 267 dims, got {}".format(o.shape[0])
+    """Decode a critic observation into semantic components.
 
+    Supported layouts:
+      267 = 27 DOFs + rough_gate (g1_29dof rough_custom/custom2/custom3)
+      271 = 29 DOFs + rough_gate (g1_43dof nohand rough_custom/custom4)
+      270 = 29 DOFs, no rough_gate (g1_43dof nohand custom5)
+    """
+    o = _to_numpy(obs).ravel()
+    n = o.shape[0]
+    if n == 267:
+        num_dof, has_gate = 27, True
+        joint_names = SIM_JOINT_NAMES_27
+        default_dof = DEFAULT_DOF_POS_27
+        urdf_path = URDF_PATH_27
+    elif n == 271:
+        num_dof, has_gate = 29, True
+        joint_names = SIM_JOINT_NAMES_29
+        default_dof = DEFAULT_DOF_POS_29
+        urdf_path = URDF_PATH_43
+    elif n == 270:
+        num_dof, has_gate = 29, False
+        joint_names = SIM_JOINT_NAMES_29
+        default_dof = DEFAULT_DOF_POS_29
+        urdf_path = URDF_PATH_43
+    else:
+        raise AssertionError("Expected 267/270/271 dims, got {}".format(n))
+
+    i = 0
     d = {}
-    d['cmd_scaled'] = o[0:3]
-    d['height_cmd'] = o[3]
-    d['ang_vel_raw'] = o[4:7] / SCALE_ANG_VEL
-    d['ang_vel_scaled'] = o[4:7]
-    d['proj_gravity'] = o[7:10]
-    d['dof_pos_rel'] = o[10:37] / SCALE_DOF_POS
-    d['dof_pos'] = d['dof_pos_rel'] + DEFAULT_DOF_POS
-    d['dof_vel_raw'] = o[37:64] / SCALE_DOF_VEL
-    d['dof_vel_scaled'] = o[37:64]
-    d['actions'] = o[64:76]
-    d['base_lin_vel_raw'] = o[76:79] / SCALE_LIN_VEL
-    d['base_lin_vel_scaled'] = o[76:79]
-    d['rough_gate'] = o[79]
-    d['scandots_scaled'] = o[80:267]
-    d['scandots_raw'] = o[80:267] / SCALE_HEIGHT  # clip(robot_z-0.5-terrain_z, -1, 1)
+    d['num_dof'] = num_dof
+    d['joint_names'] = joint_names
+    d['urdf_path'] = urdf_path
+    d['cmd_scaled'] = o[i:i+3]; i += 3
+    d['height_cmd'] = o[i]; i += 1
+    d['ang_vel_scaled'] = o[i:i+3]; d['ang_vel_raw'] = o[i:i+3] / SCALE_ANG_VEL; i += 3
+    d['proj_gravity'] = o[i:i+3]; i += 3
+    d['dof_pos_rel'] = o[i:i+num_dof] / SCALE_DOF_POS; i += num_dof
+    d['dof_pos'] = d['dof_pos_rel'] + default_dof
+    d['dof_vel_scaled'] = o[i:i+num_dof]; d['dof_vel_raw'] = o[i:i+num_dof] / SCALE_DOF_VEL; i += num_dof
+    d['actions'] = o[i:i+12]; i += 12
+    d['base_lin_vel_scaled'] = o[i:i+3]; d['base_lin_vel_raw'] = o[i:i+3] / SCALE_LIN_VEL; i += 3
+    if has_gate:
+        d['rough_gate'] = o[i]; i += 1
+    else:
+        d['rough_gate'] = float('nan')
+    d['scandots_scaled'] = o[i:i+187]
+    d['scandots_raw'] = o[i:i+187] / SCALE_HEIGHT
     return d
 
 
@@ -191,9 +240,9 @@ def _height_to_color(terrain_z):
     return colors
 
 
-def _build_sim_to_viser(viser_joint_names):
+def _build_sim_to_viser(viser_joint_names, sim_joint_names):
     """Map Isaac Gym DOF indices to ViserUrdf joint indices."""
-    sim_name_to_idx = {n: i for i, n in enumerate(SIM_JOINT_NAMES)}
+    sim_name_to_idx = {n: i for i, n in enumerate(sim_joint_names)}
     indices = []
     for name in viser_joint_names:
         if name in sim_name_to_idx:
@@ -221,7 +270,7 @@ def _print_decoded(d, label=""):
         d['scandots_raw'].min(), d['scandots_raw'].max()))
 
     print("  Joint positions (deg):")
-    for i, name in enumerate(SIM_JOINT_NAMES):
+    for i, name in enumerate(d['joint_names']):
         deg = np.degrees(d['dof_pos'][i])
         rel_deg = np.degrees(d['dof_pos_rel'][i])
         if abs(rel_deg) > 5:
@@ -253,13 +302,14 @@ def debug_vis(obs_bad, obs_good=None, port=8090):
 
     server = viser.ViserServer(port=port)
 
-    # Load URDF
+    # Load URDF (from decoded obs — 267 uses g1.urdf, 271 uses g1_43dof.urdf)
+    urdf_path = d_bad['urdf_path']
     filename_handler = partial(
         yourdfpy.filename_handler_relative_to_urdf_file,
-        urdf_fname=URDF_PATH,
+        urdf_fname=urdf_path,
     )
     urdf = yourdfpy.URDF.load(
-        URDF_PATH,
+        urdf_path,
         load_meshes=True,
         build_scene_graph=True,
         filename_handler=filename_handler,
@@ -281,12 +331,13 @@ def debug_vis(obs_bad, obs_good=None, port=8090):
             viser_names = list(robot.get_actuated_joint_names())
         else:
             viser_names = list(robot.get_actuated_joint_limits().keys())
-        sim_to_viser = _build_sim_to_viser(viser_names)
+        sim_to_viser = _build_sim_to_viser(viser_names, d['joint_names'])
 
         # Set joint angles
         cfg = np.zeros(len(viser_names), dtype=np.float64)
+        num_dof = d['num_dof']
         for vi, si in enumerate(sim_to_viser):
-            if 0 <= si < 27:
+            if 0 <= si < num_dof:
                 cfg[vi] = d['dof_pos'][si]
         robot.update_cfg(cfg)
 

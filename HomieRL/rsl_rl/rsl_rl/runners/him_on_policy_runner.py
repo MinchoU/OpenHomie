@@ -167,7 +167,7 @@ class HIMOnPolicyRunner:
                                          - _dbg_prev_v)
                             _td_abs_max = _td_error.abs().max().item()
                             _v_max = v_now.abs().max().item()
-                            if _td_abs_max > 50.0 or _v_max > 500.0 or torch.isnan(v_now).any():
+                            if _v_max > 100.0 or torch.isnan(v_now).any():
                                 _worst = _td_error.abs().argmax().item()
                                 print(f"[DEBUG:td] iter={it} step={i} "
                                       f"td_max={_td_abs_max:.1f} v_max={_v_max:.1f} "

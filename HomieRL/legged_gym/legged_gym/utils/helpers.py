@@ -102,18 +102,23 @@ def parse_sim_params(args, cfg):
     return sim_params
 
 def get_load_path(root, load_run=-1, checkpoint=-1):
-    try:
-        runs = os.listdir(root)
-        #TODO sort by date to handle change of month
-        runs.sort()
-        if 'exported' in runs: runs.remove('exported')
-        last_run = os.path.join(root, runs[-1])
-    except:
-        raise ValueError("No runs in this directory: " + root)
-    if load_run == -1 or load_run == "-1":
-        load_run = last_run
+    # If load_run is an absolute path, skip listing `root` (which may not exist yet).
+    if isinstance(load_run, str) and os.path.isabs(load_run):
+        load_run_path = load_run
     else:
-        load_run = os.path.join(root, load_run)
+        try:
+            runs = os.listdir(root)
+            #TODO sort by date to handle change of month
+            runs.sort()
+            if 'exported' in runs: runs.remove('exported')
+            last_run = os.path.join(root, runs[-1])
+        except:
+            raise ValueError("No runs in this directory: " + root)
+        if load_run == -1 or load_run == "-1":
+            load_run_path = last_run
+        else:
+            load_run_path = os.path.join(root, load_run)
+    load_run = load_run_path
 
     if checkpoint == -1:
         models = [file for file in os.listdir(load_run) if 'model' in file]
@@ -157,6 +162,31 @@ def _apply_reward_scale_override(env_cfg, override):
     setattr(env_cfg.rewards.scales, key, value)
     print(f"Overriding reward scale: {key} {old_value} -> {value}")
 
+def _parse_init_terrain_ratio(raw):
+    """Parse --init_terrain_ratio into a list of non-negative floats summing to 1.
+
+    Accepts ``"[0.5,0.3,0.2]"``, ``"0.5,0.3,0.2"``, or whitespace-separated forms.
+    """
+    s = raw.strip()
+    if s.startswith("["):
+        s = s[1:]
+    if s.endswith("]"):
+        s = s[:-1]
+    parts = [p.strip() for chunk in s.split(",") for p in chunk.split() if p.strip()]
+    if not parts:
+        raise ValueError(f"--init_terrain_ratio is empty: {raw!r}")
+    try:
+        ratio = [float(p) for p in parts]
+    except ValueError as exc:
+        raise ValueError(f"--init_terrain_ratio has non-float entry in {raw!r}: {exc}") from exc
+    if any(r < 0 for r in ratio):
+        raise ValueError(f"--init_terrain_ratio has negative entry: {ratio}")
+    total = sum(ratio)
+    if total <= 0:
+        raise ValueError(f"--init_terrain_ratio sums to <= 0: {ratio}")
+    return [r / total for r in ratio]
+
+
 def update_cfg_from_args(env_cfg, cfg_train, args):
     # seed
     if env_cfg is not None:
@@ -180,6 +210,9 @@ def update_cfg_from_args(env_cfg, cfg_train, args):
             env_cfg.debug = True
         if getattr(args, "init_upper_ratio", None) is not None:
             env_cfg.domain_rand.init_upper_ratio = args.init_upper_ratio
+        if getattr(args, "init_terrain_ratio", None) is not None:
+            env_cfg.terrain.init_terrain_ratio = _parse_init_terrain_ratio(args.init_terrain_ratio)
+            print(f"Using init_terrain_ratio: {[round(r, 4) for r in env_cfg.terrain.init_terrain_ratio]}")
     if cfg_train is not None:
         if args.seed is not None:
             cfg_train.seed = args.seed
@@ -223,6 +256,8 @@ def get_args():
         {"name": "--reward_scale", "action": "append", "default": None, "help": "Override a reward scale as key=value. Can be passed multiple times."},
         {"name": "--debug", "action": "store_true", "default": False, "help": "Enable training debug checkpoints (breakpoints on NaN/exploding values)."},
         {"name": "--init_upper_ratio", "type": float, "default": None, "help": "Override init_upper_ratio (action curriculum starting point). Use 1.0 to skip curriculum on resume."},
+        {"name": "--init_terrain_ratio", "type": str, "default": None, "help": "Initial terrain-level distribution as a comma-separated list of floats (brackets optional), e.g. [0.5,0.3,0.2]. Auto-normalized to sum to 1."},
+        {"name": "--log_dir", "type": str, "default": None, "help": "Override the logs base directory (replaces LEGGED_GYM_ROOT_DIR). Logs go to <log_dir>/logs/<experiment_name>/<date_time>_<run_name>."},
     ]
     # parse arguments
     args = gymutil.parse_arguments(

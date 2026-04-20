@@ -208,20 +208,20 @@ class LeggedRobot(BaseTask):
         self.base_ang_vel[:] = quat_rotate_inverse(self.base_quat, self.root_states[:, 10:13])
         self.projected_gravity[:] = quat_rotate_inverse(self.base_quat, self.gravity_vec)
         self.base_lin_acc = (self.root_states[:, 7:10] - self.last_root_vel[:, :3]) / self.dt
-        # --- DEBUG checkpoint 2: dynamics explosion ---
-        if self.training_debug:
-            _dv_max = self.dof_vel.abs().max().item()
-            _blv_max = self.base_lin_vel.abs().max().item()
-            _bav_max = self.base_ang_vel.abs().max().item()
-            if _dv_max > 100.0 or _blv_max > 10.0 or _bav_max > 20.0:
-                _worst_dv_env = self.dof_vel.abs().max(dim=1).values.argmax().item()
-                _worst_blv_env = self.base_lin_vel.abs().max(dim=1).values.argmax().item()
-                print(f"[DEBUG:dynamics] step={self.common_step_counter} "
-                      f"dof_vel_max={_dv_max:.1f}(env={_worst_dv_env}) "
-                      f"base_lin_vel_max={_blv_max:.1f}(env={_worst_blv_env}) "
-                      f"base_ang_vel_max={_bav_max:.1f} "
-                      f"dof_vel[{_worst_dv_env}]={self.dof_vel[_worst_dv_env].tolist()}")
-                breakpoint()
+        # # --- DEBUG checkpoint 2: dynamics explosion ---
+        # if self.training_debug:
+        #     _dv_max = self.dof_vel.abs().max().item()
+        #     _blv_max = self.base_lin_vel.abs().max().item()
+        #     _bav_max = self.base_ang_vel.abs().max().item()
+        #     if _dv_max > 100.0 or _blv_max > 10.0 or _bav_max > 20.0:
+        #         _worst_dv_env = self.dof_vel.abs().max(dim=1).values.argmax().item()
+        #         _worst_blv_env = self.base_lin_vel.abs().max(dim=1).values.argmax().item()
+        #         print(f"[DEBUG:dynamics] step={self.common_step_counter} "
+        #               f"dof_vel_max={_dv_max:.1f}(env={_worst_dv_env}) "
+        #               f"base_lin_vel_max={_blv_max:.1f}(env={_worst_blv_env}) "
+        #               f"base_ang_vel_max={_bav_max:.1f} "
+        #               f"dof_vel[{_worst_dv_env}]={self.dof_vel[_worst_dv_env].tolist()}")
+        #         breakpoint()
 
         self.feet_pos[:] = self.rigid_body_states.view(self.num_envs, self.num_bodies, 13)[:, self.feet_indices, 0:3]
         self.feet_quat[:] = self.rigid_body_states.view(self.num_envs, self.num_bodies, 13)[:, self.feet_indices, 3:7]
@@ -300,6 +300,19 @@ class LeggedRobot(BaseTask):
         """
         self.reset_buf = torch.any(torch.norm(self.contact_forces[:, self.termination_contact_indices, :], dim=-1) > 10., dim=1)
         self.time_out_buf = self.episode_length_buf > self.max_episode_length # no terminal reward for time-outs
+        # trimesh/heightfield edge → timeout (bootstrap), so the agent doesn't get a terminal penalty
+        # for leaving the finite terrain.
+        if getattr(self, 'custom_origins', False):
+            margin = 0.5
+            x_max = self.cfg.terrain.num_rows * self.cfg.terrain.terrain_length - margin
+            y_max = self.cfg.terrain.num_cols * self.cfg.terrain.terrain_width - margin
+            edge_buf = (
+                (self.root_states[:, 0] < margin)
+                | (self.root_states[:, 0] > x_max)
+                | (self.root_states[:, 1] < margin)
+                | (self.root_states[:, 1] > y_max)
+            )
+            self.time_out_buf |= edge_buf
         self.gravity_termination_buf = torch.any(torch.norm(self.projected_gravity[:, 0:2], dim=-1, keepdim=True) > 0.8, dim=1)
         self.reset_buf |= self.time_out_buf
         self.reset_buf |= self.gravity_termination_buf
@@ -1339,7 +1352,15 @@ class LeggedRobot(BaseTask):
             if not self.cfg.terrain.curriculum:
                 max_init_level = self.cfg.terrain.num_rows - 1
             max_init_level = min(max_init_level, self.cfg.terrain.num_rows - 1)
-            self.terrain_levels = torch.randint(0, max_init_level + 1, (self.num_envs,), device=self.device)
+            init_ratio = getattr(self.cfg.terrain, 'init_terrain_ratio', None)
+            if init_ratio is not None and len(init_ratio) > 0:
+                ratio = torch.tensor(init_ratio, device=self.device, dtype=torch.float)
+                n_levels = min(ratio.shape[0], self.cfg.terrain.num_rows)
+                ratio = ratio[:n_levels]
+                ratio = ratio / ratio.sum()
+                self.terrain_levels = torch.multinomial(ratio, self.num_envs, replacement=True).to(self.device)
+            else:
+                self.terrain_levels = torch.randint(0, max_init_level + 1, (self.num_envs,), device=self.device)
             self.terrain_types = torch.div(
                 torch.arange(self.num_envs, device=self.device),
                 self.num_envs / self.cfg.terrain.num_cols,

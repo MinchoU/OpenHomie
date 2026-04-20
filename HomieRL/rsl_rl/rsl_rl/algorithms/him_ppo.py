@@ -219,17 +219,41 @@ class HIMPPO:
                 # Gradient step
                 self.optimizer.zero_grad()
                 loss.backward()
-                # --- DEBUG checkpoint 6: gradient norm explosion ---
-                if self.training_debug:
-                    _grad_norm = nn.utils.clip_grad_norm_(
-                        self.actor_critic.parameters(), float('inf'))
-                    if _grad_norm > 100.0 or torch.isnan(_grad_norm):
-                        print(f"[DEBUG:grad] grad_norm={_grad_norm:.1f} "
-                              f"val_loss={value_loss.item():.4f} "
-                              f"surr={surrogate_loss.item():.4f} "
-                              f"total_loss={loss.item():.4f} "
-                              f"max_grad_norm_cfg={self.max_grad_norm}")
-                        breakpoint()
+                # --- DEBUG checkpoint 6: per-minibatch value loss spike ---
+                if self.training_debug and (value_loss.item() > 10.0 or torch.isnan(value_loss)):
+                    import os as _os
+                    _cnt = getattr(self, '_dbg_loss_cnt', 0)
+                    self._dbg_loss_cnt = _cnt + 1
+                    _dir = _os.path.expanduser('~/homie_debug_loss')
+                    _os.makedirs(_dir, exist_ok=True)
+                    _path = _os.path.join(_dir, f'minibatch_{_cnt:04d}.pt')
+                    torch.save({
+                        'obs_batch': obs_batch.detach().cpu(),
+                        'critic_obs_batch': critic_obs_batch.detach().cpu(),
+                        'actions_batch': actions_batch.detach().cpu(),
+                        'target_values_batch': target_values_batch.detach().cpu(),
+                        'returns_batch': returns_batch.detach().cpu(),
+                        'advantages_batch': advantages_batch.detach().cpu(),
+                        'value_batch': value_batch.detach().cpu(),
+                        'mu_batch': mu_batch.detach().cpu(),
+                        'sigma_batch': sigma_batch.detach().cpu(),
+                        'old_mu_batch': old_mu_batch.detach().cpu(),
+                        'old_sigma_batch': old_sigma_batch.detach().cpu(),
+                        'old_actions_log_prob_batch': old_actions_log_prob_batch.detach().cpu(),
+                    }, _path)
+                    _err = (value_batch - returns_batch).squeeze(-1).detach()
+                    _w = _err.abs().argmax().item()
+                    print(f"[DEBUG:loss_mb] val_loss={value_loss.item():.1f} "
+                          f"surr={surrogate_loss.item():.4f} "
+                          f"|V|max={value_batch.abs().max().item():.1f} "
+                          f"|R|max={returns_batch.abs().max().item():.1f} "
+                          f"|T|max={target_values_batch.abs().max().item():.1f} "
+                          f"|err|max={_err.abs().max().item():.1f} "
+                          f"worst={_w} V={value_batch.squeeze(-1)[_w].item():.1f} "
+                          f"R={returns_batch.squeeze(-1)[_w].item():.1f} "
+                          f"T={target_values_batch.squeeze(-1)[_w].item():.1f} "
+                          f"(saved {_path})")
+                    breakpoint()
                 nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
                 self.optimizer.step()
 

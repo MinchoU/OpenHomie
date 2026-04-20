@@ -313,6 +313,9 @@ class G1RoughTerrainCfg( G1RoughCfg ):
         num_cols = 20
         terrain_proportions = [0.1, 0.2, 0.3, 0.3, 0.1]
 
+    class asset( G1RoughCfg.asset ):
+        file = '{LEGGED_GYM_ROOT_DIR}/resources/robots/g1_description/g1_with_collision.urdf'
+
 class G1RoughTerrainCfgPPO( G1RoughCfgPPO ):
     class runner( G1RoughCfgPPO.runner ):
         experiment_name = 'g1_rough'

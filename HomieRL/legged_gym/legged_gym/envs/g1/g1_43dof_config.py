@@ -318,6 +318,9 @@ class G143dofRoughTerrainCfg( G143dofRoughCfg ):
         num_cols = 20
         terrain_proportions = [0.1, 0.2, 0.3, 0.3, 0.1]
 
+    class asset( G143dofRoughCfg.asset ):
+        file = '{LEGGED_GYM_ROOT_DIR}/resources/robots/g1_description/g1_43dof_with_collision.urdf'
+
 class G143dofRoughTerrainCfgPPO( G143dofRoughCfgPPO ):
     class runner( G143dofRoughCfgPPO.runner ):
         experiment_name = 'g1_43dof_rough'
@@ -381,6 +384,9 @@ class G143dofNoHandObsRoughTerrainCfg( G143dofNoHandObsRoughCfg ):
         num_rows = 10
         num_cols = 20
         terrain_proportions = [0.1, 0.2, 0.3, 0.3, 0.1]
+
+    class asset( G143dofNoHandObsRoughCfg.asset ):
+        file = '{LEGGED_GYM_ROOT_DIR}/resources/robots/g1_description/g1_43dof_with_collision.urdf'
 
 
 class G143dofNoHandObsRoughTerrainCfgPPO( G143dofNoHandObsRoughCfgPPO ):
